@@ -6,6 +6,8 @@
   "main": "worker.js",
   "assets": {
     "directory": "./dist",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    // POST от Битрикс24 должен попадать в worker.js, а не в слой статики (иначе 405)
+    "run_worker_first": true
   }
 }
