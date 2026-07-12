@@ -1,0 +1,11 @@
+{
+  // Конфиг Cloudflare Workers: воркер принимает POST от Битрикс24 (worker.js),
+  // статика собранного дашборда раздаётся из dist через биндинг ASSETS.
+  "name": "infocenterrck",
+  "compatibility_date": "2026-07-01",
+  "main": "worker.js",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS"
+  }
+}

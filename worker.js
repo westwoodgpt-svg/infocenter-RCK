@@ -1,4 +1,4 @@
-// Cloudflare Pages worker: Битрикс24 открывает приложение POST-запросом,
+// Cloudflare Worker: Битрикс24 открывает локальное приложение POST-запросом,
 // а статика отдаётся только по GET — переигрываем метод, сохраняя URL и query.
 export default {
   async fetch(request, env) {
