@@ -60,6 +60,11 @@ export default function App() {
   // Момент последней успешной синхронизации хотя бы одного Списка (реальные данные из Б24)
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
 
+  // Страховка: если TIMESTAMP_X не удалось получить/распарсить ни у одного Списка
+  // (бывает на некоторых версиях коробки), показываем хотя бы время последней
+  // успешной загрузки в браузере, а не бесконечную надпись "загрузка…".
+  const [clientFetchedAt, setClientFetchedAt] = useState<Date | null>(null);
+
   // Список ключей Списков, которые не удалось загрузить в последний раз (для баннера ошибок)
   const [loadErrors, setLoadErrors] = useState<Record<string, string>>({});
 
@@ -109,10 +114,16 @@ export default function App() {
     return isNaN(n) ? null : n;
   };
 
-  // Парсинг TIMESTAMP_X (формат Битрикса "DD.MM.YYYY HH:mm:ss") в Date
+  // Парсинг TIMESTAMP_X — REST API Битрикс24 обычно отдаёт ISO 8601
+  // ("2026-07-15T15:03:00+03:00"), но коробочные версии иногда возвращают
+  // классический админский формат "DD.MM.YYYY HH:mm:ss" — пробуем оба варианта.
   const parseB24Timestamp = (v: any): Date | null => {
     const raw = extractPropValue(v);
     if (!raw) return null;
+
+    const iso = new Date(raw);
+    if (!isNaN(iso.getTime())) return iso;
+
     const m = raw.match(/^(\d{2})\.(\d{2})\.(\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?/);
     if (!m) return null;
     const [, dd, mm, yyyy, hh = '0', min = '0', ss = '0'] = m;
@@ -417,7 +428,10 @@ export default function App() {
     });
 
     // Complete live load flag
-    setTimeout(() => setIsLiveLoading(false), 800);
+    setTimeout(() => {
+      setIsLiveLoading(false);
+      setClientFetchedAt(new Date());
+    }, 800);
   }, []);
 
   // Load B24 live data if window.BX24 is present
@@ -469,7 +483,9 @@ export default function App() {
                     {b24Detected
                       ? (lastSyncedAt
                           ? lastSyncedAt.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
-                          : 'загрузка…')
+                          : clientFetchedAt
+                            ? `${clientFetchedAt.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })} (время загрузки)`
+                            : 'загрузка…')
                       : new Date(data.updated).toLocaleDateString('ru-RU')}
                   </strong>
                 </span>
