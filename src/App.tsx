@@ -34,7 +34,8 @@ const LISTS = {
   edu:            { id: 84, props: { quarter: 'PROPERTY_512', plan: 'PROPERTY_513', fact: 'PROPERTY_514' } },
   smi:            { id: 85, props: { week: 'PROPERTY_515', plan: 'PROPERTY_516', fact: 'PROPERTY_517' } },
   smeta:          { id: 86, props: { item: 'PROPERTY_518', amount: 'PROPERTY_519' } },
-  personnel:      { id: 87, props: { dept: 'PROPERTY_520', plan: 'PROPERTY_521', fact: 'PROPERTY_522' } }
+  personnel:      { id: 87, props: { dept: 'PROPERTY_520', plan: 'PROPERTY_521', fact: 'PROPERTY_522' } },
+  events:         { id: 88, props: { date: 'PROPERTY_523' } }
 };
 
 // Человекочитаемые названия Списков — используются в баннере ошибок
@@ -49,6 +50,7 @@ const LIST_LABELS: Record<string, string> = {
   smi: 'Производство — СМИ',
   smeta: 'Затраты — Смета',
   personnel: 'Персонал',
+  events: 'Ключевые события',
 };
 
 export default function App() {
@@ -129,6 +131,21 @@ export default function App() {
     const [, dd, mm, yyyy, hh = '0', min = '0', ss = '0'] = m;
     const dt = new Date(Number(yyyy), Number(mm) - 1, Number(dd), Number(hh), Number(min), Number(ss));
     return isNaN(dt.getTime()) ? null : dt;
+  };
+
+  // Приводим дату из Списка ("DD.MM.YYYY" или уже "YYYY-MM-DD") к единому формату
+  // "YYYY-MM-DD", который одинаково понимают все места App.tsx/SecurityPanel.tsx,
+  // включая необработанный new Date(...) для карточки "Запланировано на".
+  const normalizeToIsoDate = (raw: string): string => {
+    const trimmed = raw.trim();
+    const ru = trimmed.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+    if (ru) {
+      const [, dd, mm, yyyy] = ru;
+      return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
+    }
+    const iso = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) return iso[0];
+    return trimmed;
   };
 
   // B24 lists rows fetcher
@@ -425,6 +442,30 @@ export default function App() {
         rck: { plan: toNum(rckRow.plan, 6), fact: toNum(rckRow.fact, 6) },
         cuppp: { plan: toNum(cupppRow.plan, 4), fact: toNum(cupppRow.fact, 1) }
       }));
+    });
+
+    // Load Key Events / Certification date (88)
+    // Сортируем по дате и берём как "Сертификация" строку, где в названии
+    // встречается "сертификац" — так карточка "Дней до сертификации" не требует
+    // отдельного поля в Списке.
+    loadListRows('events', LISTS.events, (rows) => {
+      const validRows = rows
+        .map(r => ({
+          name: String(r.NAME || '').trim(),
+          date: normalizeToIsoDate(String(r.date || '')),
+        }))
+        .filter(item => item.name !== '' && item.date !== '');
+
+      if (validRows.length) {
+        validRows.sort((a, b) => a.date.localeCompare(b.date));
+        const certEvent = validRows.find(e => e.name.toLowerCase().includes('сертификац'));
+
+        setData(prev => ({
+          ...prev,
+          events: validRows,
+          certification: certEvent ? certEvent.date : prev.certification,
+        }));
+      }
     });
 
     // Complete live load flag
