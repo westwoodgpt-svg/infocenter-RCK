@@ -1,12 +1,12 @@
 {
-    "buildCommand": "npm run build",
-    "outputDirectory": "dist",
-    "rewrites": [
-          { "source": "/(.*)", "destination": "/api/serve" }
-    ],
-    "functions": {
-          "api/serve.js": {
-                  "includeFiles": "dist/**"
-          }
-    }
+      "buildCommand": "npm run build",
+      "outputDirectory": "dist",
+      "routes": [
+              { "src": "/(.*)", "dest": "/api/serve" }
+      ],
+      "functions": {
+              "api/serve.js": {
+                        "includeFiles": "dist/**"
+              }
+      }
 }
