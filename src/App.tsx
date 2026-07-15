@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   ShieldCheck, 
@@ -37,11 +37,31 @@ const LISTS = {
   personnel:      { id: 87, props: { dept: 'PROPERTY_520', plan: 'PROPERTY_521', fact: 'PROPERTY_522' } }
 };
 
+// Человекочитаемые названия Списков — используются в баннере ошибок
+const LIST_LABELS: Record<string, string> = {
+  fines: 'Штрафы',
+  npsFabrika: 'NPS — Фабрика процессов',
+  npsFabrikaOfis: 'NPS — Фабрика офисных процессов',
+  npsTreningi: 'NPS — Тренинги',
+  ibp: 'Производство — ИБП',
+  projects: 'Производство — Проекты',
+  edu: 'Производство — Обучение',
+  smi: 'Производство — СМИ',
+  smeta: 'Затраты — Смета',
+  personnel: 'Персонал',
+};
+
 export default function App() {
   const [data, setData] = useState<RckDashboardData>(RCK_DATA);
   const [activeTab, setActiveTab] = useState<TabId>('security');
   const [isLiveLoading, setIsLiveLoading] = useState(false);
   const [b24Detected, setB24Detected] = useState(false);
+
+  // Момент последней успешной синхронизации хотя бы одного Списка (реальные данные из Б24)
+  const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
+
+  // Список ключей Списков, которые не удалось загрузить в последний раз (для баннера ошибок)
+  const [loadErrors, setLoadErrors] = useState<Record<string, string>>({});
 
   // Formatting date for subtitle
   const formattedToday = useMemo(() => {
@@ -89,8 +109,23 @@ export default function App() {
     return isNaN(n) ? null : n;
   };
 
+  // Парсинг TIMESTAMP_X (формат Битрикса "DD.MM.YYYY HH:mm:ss") в Date
+  const parseB24Timestamp = (v: any): Date | null => {
+    const raw = extractPropValue(v);
+    if (!raw) return null;
+    const m = raw.match(/^(\d{2})\.(\d{2})\.(\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?/);
+    if (!m) return null;
+    const [, dd, mm, yyyy, hh = '0', min = '0', ss = '0'] = m;
+    const dt = new Date(Number(yyyy), Number(mm) - 1, Number(dd), Number(hh), Number(min), Number(ss));
+    return isNaN(dt.getTime()) ? null : dt;
+  };
+
   // B24 lists rows fetcher
-  const loadListRows = (listCfg: any, onLoaded: (rows: any[]) => void) => {
+  const loadListRows = (
+    listKey: string,
+    listCfg: any,
+    onLoaded: (rows: any[]) => void
+  ) => {
     const propKeys = Object.keys(listCfg.props).map((k) => (listCfg.props as any)[k]);
     const BX24 = (window as any).BX24;
 
@@ -101,14 +136,37 @@ export default function App() {
       {
         IBLOCK_TYPE_ID: 'lists',
         IBLOCK_ID: listCfg.id,
-        SELECT: ['ID', 'NAME', ...propKeys]
+        SELECT: ['ID', 'NAME', 'TIMESTAMP_X', ...propKeys]
       },
       (result: any) => {
         if (result.error()) {
-          console.warn(`Список ID ${listCfg.id} недоступен, показываю данные по умолчанию:`, result.error());
+          const err = result.error();
+          const message = (err && (err.ex?.error_description || err.error_description)) || 'неизвестная ошибка';
+          console.warn(`Список ID ${listCfg.id} (${listKey}) недоступен, показываю данные по умолчанию:`, err);
+          setLoadErrors(prev => ({ ...prev, [listKey]: message }));
           return;
         }
+
+        // Список отдал ответ успешно — снимаем возможную прежнюю пометку об ошибке
+        setLoadErrors(prev => {
+          if (!(listKey in prev)) return prev;
+          const next = { ...prev };
+          delete next[listKey];
+          return next;
+        });
+
         const rows = result.answer.result || [];
+
+        // Отмечаем самое позднее реальное время изменения строки среди всех Списков
+        let latestInList: Date | null = null;
+        rows.forEach((row: any) => {
+          const ts = parseB24Timestamp(row.TIMESTAMP_X);
+          if (ts && (!latestInList || ts > latestInList)) latestInList = ts;
+        });
+        if (latestInList) {
+          setLastSyncedAt(prev => (!prev || (latestInList as Date) > prev ? (latestInList as Date) : prev));
+        }
+
         const mapped = rows.map((row: any) => {
           const o: any = {};
           
@@ -183,179 +241,189 @@ export default function App() {
     );
   };
 
+  // Загрузка (и повторная загрузка по кнопке "Обновить") всех Списков Б24
+  const loadAllData = useCallback(() => {
+    const BX24 = (window as any).BX24;
+    if (typeof BX24 === 'undefined') return;
+
+    setB24Detected(true);
+    setIsLiveLoading(true);
+
+    // Load Fines (78)
+    loadListRows('fines', LISTS.fines, (rows) => {
+      setData(prev => ({
+        ...prev,
+        fines: rows.map(r => ({ car: String(r.car), lastFine: String(r.date) }))
+      }));
+    });
+
+    // Load NPS Fabrika (79)
+    loadListRows('npsFabrika', LISTS.npsFabrika, (rows) => {
+      const validRows = rows.map(r => {
+        const companyVal = String(r.company || r.NAME || '').trim();
+        const dateVal = String(r.date || '');
+        const factVal = toNum(r.fact, 0);
+        return { company: companyVal, date: dateVal, fact: factVal };
+      }).filter(item => item.company !== '');
+
+      if (validRows.length) {
+        setData(prev => ({
+          ...prev,
+          npsFabrika: {
+            ...prev.npsFabrika,
+            companies: validRows.map(r => r.company),
+            dates: validRows.map(r => r.date),
+            fact: validRows.map(r => r.fact)
+          }
+        }));
+      }
+    });
+
+    // Load NPS Fabrika Ofis (80)
+    loadListRows('npsFabrikaOfis', LISTS.npsFabrikaOfis, (rows) => {
+      const validRows = rows.map(r => {
+        const companyVal = String(r.company || r.NAME || '').trim();
+        const dateVal = String(r.date || '');
+        const factVal = toNum(r.fact, 0);
+        return { company: companyVal, date: dateVal, fact: factVal };
+      }).filter(item => item.company !== '');
+
+      if (validRows.length) {
+        setData(prev => ({
+          ...prev,
+          npsFabrikaOfis: {
+            ...prev.npsFabrikaOfis,
+            companies: validRows.map(r => r.company),
+            dates: validRows.map(r => r.date),
+            fact: validRows.map(r => r.fact)
+          }
+        }));
+      }
+    });
+
+    // Load NPS Treningi (81)
+    loadListRows('npsTreningi', LISTS.npsTreningi, (rows) => {
+      const validRows = rows.map(r => {
+        const nameVal = String(r.name || r.NAME || '').trim();
+        const factVal = toNum(r.fact, 0);
+        return { name: nameVal, fact: factVal };
+      }).filter(item => item.name !== '');
+
+      if (validRows.length) {
+        setData(prev => ({
+          ...prev,
+          npsTreningi: {
+            ...prev.npsTreningi,
+            names: validRows.map(r => r.name),
+            fact: validRows.map(r => r.fact)
+          }
+        }));
+      }
+    });
+
+    // Load IBP progress (82)
+    loadListRows('ibp', LISTS.ibp, (rows) => {
+      setData(prev => ({
+        ...prev,
+        ibp: {
+          plan: rows.map(r => toNum(r.plan, 0)),
+          gotovitsya: rows.map(r => toNullableNum(r.prep)),
+          gotov: rows.map(r => toNullableNum(r.ready))
+        }
+      }));
+    });
+
+    // Load Projects (83)
+    loadListRows('projects', LISTS.projects, (rows) => {
+      setData(prev => ({
+        ...prev,
+        projects: {
+          plan: rows.map(r => toNum(r.plan, 0)),
+          otkryto: rows.map(r => toNullableNum(r.open)),
+          zakryto: rows.map(r => toNullableNum(r.closed))
+        }
+      }));
+    });
+
+    // Load Education (84)
+    loadListRows('edu', LISTS.edu, (rows) => {
+      setData(prev => ({
+        ...prev,
+        edu: {
+          plan: rows.map(r => toNum(r.plan, 0)),
+          fact: rows.map(r => toNullableNum(r.fact))
+        }
+      }));
+    });
+
+    // Load SMI mentions (85)
+    loadListRows('smi', LISTS.smi, (rows) => {
+      setData(prev => ({
+        ...prev,
+        smi: {
+          weeks: rows.map(r => String(r.week)),
+          plan: rows.map(r => toNum(r.plan, 0)),
+          fact: rows.map(r => toNullableNum(r.fact))
+        }
+      }));
+    });
+
+    // Load Smeta / Costs (86)
+    loadListRows('smeta', LISTS.smeta, (rows) => {
+      setData(prev => {
+        let spent = prev.smeta.spent;
+        let contractedNotSpent = prev.smeta.contractedNotSpent;
+        let notContracted = prev.smeta.notContracted;
+
+        rows.forEach(r => {
+          const item = String(r.item).toLowerCase();
+          const amount = toNum(r.amount, 0);
+          if (item.includes('потрачено') || item.includes('освоено')) {
+            spent = amount;
+          } else if (item.includes('законтрактовано')) {
+            contractedNotSpent = amount;
+          } else if (item.includes('не законтрактовано')) {
+            notContracted = amount;
+          }
+        });
+
+        return {
+          ...prev,
+          smeta: {
+            total: spent + contractedNotSpent + notContracted,
+            spent,
+            contractedNotSpent,
+            notContracted
+          }
+        };
+      });
+    });
+
+    // Load Personnel (87)
+    // Строки сопоставляются по названию отдела (dept), а не по порядку в Списке —
+    // так перестановка или добавление строки в Битриксе не перепутает РЦК и ЦУППП.
+    loadListRows('personnel', LISTS.personnel, (rows) => {
+      const findByDept = (needle: string) =>
+        rows.find(r => String(r.dept || r.NAME || '').toLowerCase().includes(needle));
+
+      const rckRow = findByDept('рцк') || rows[0] || { plan: 6, fact: 6 };
+      const cupppRow = findByDept('цуппп') || rows[1] || { plan: 4, fact: 1 };
+
+      setData(prev => ({
+        ...prev,
+        rck: { plan: toNum(rckRow.plan, 6), fact: toNum(rckRow.fact, 6) },
+        cuppp: { plan: toNum(cupppRow.plan, 4), fact: toNum(cupppRow.fact, 1) }
+      }));
+    });
+
+    // Complete live load flag
+    setTimeout(() => setIsLiveLoading(false), 800);
+  }, []);
+
   // Load B24 live data if window.BX24 is present
   useEffect(() => {
-    const BX24 = (window as any).BX24;
-    if (typeof BX24 !== 'undefined') {
-      setB24Detected(true);
-      setIsLiveLoading(true);
-
-      // Load Fines (78)
-      loadListRows(LISTS.fines, (rows) => {
-        setData(prev => ({
-          ...prev,
-          fines: rows.map(r => ({ car: String(r.car), lastFine: String(r.date) }))
-        }));
-      });
-
-      // Load NPS Fabrika (79)
-      loadListRows(LISTS.npsFabrika, (rows) => {
-        const validRows = rows.map(r => {
-          const companyVal = String(r.company || r.NAME || '').trim();
-          const dateVal = String(r.date || '');
-          const factVal = toNum(r.fact, 0);
-          return { company: companyVal, date: dateVal, fact: factVal };
-        }).filter(item => item.company !== '');
-
-        if (validRows.length) {
-          setData(prev => ({
-            ...prev,
-            npsFabrika: {
-              ...prev.npsFabrika,
-              companies: validRows.map(r => r.company),
-              dates: validRows.map(r => r.date),
-              fact: validRows.map(r => r.fact)
-            }
-          }));
-        }
-      });
-
-      // Load NPS Fabrika Ofis (80)
-      loadListRows(LISTS.npsFabrikaOfis, (rows) => {
-        const validRows = rows.map(r => {
-          const companyVal = String(r.company || r.NAME || '').trim();
-          const dateVal = String(r.date || '');
-          const factVal = toNum(r.fact, 0);
-          return { company: companyVal, date: dateVal, fact: factVal };
-        }).filter(item => item.company !== '');
-
-        if (validRows.length) {
-          setData(prev => ({
-            ...prev,
-            npsFabrikaOfis: {
-              ...prev.npsFabrikaOfis,
-              companies: validRows.map(r => r.company),
-              dates: validRows.map(r => r.date),
-              fact: validRows.map(r => r.fact)
-            }
-          }));
-        }
-      });
-
-      // Load NPS Treningi (81)
-      loadListRows(LISTS.npsTreningi, (rows) => {
-        const validRows = rows.map(r => {
-          const nameVal = String(r.name || r.NAME || '').trim();
-          const factVal = toNum(r.fact, 0);
-          return { name: nameVal, fact: factVal };
-        }).filter(item => item.name !== '');
-
-        if (validRows.length) {
-          setData(prev => ({
-            ...prev,
-            npsTreningi: {
-              ...prev.npsTreningi,
-              names: validRows.map(r => r.name),
-              fact: validRows.map(r => r.fact)
-            }
-          }));
-        }
-      });
-
-      // Load IBP progress (82)
-      loadListRows(LISTS.ibp, (rows) => {
-        setData(prev => ({
-          ...prev,
-          ibp: {
-            plan: rows.map(r => toNum(r.plan, 0)),
-            gotovitsya: rows.map(r => toNullableNum(r.prep)),
-            gotov: rows.map(r => toNullableNum(r.ready))
-          }
-        }));
-      });
-
-      // Load Projects (83)
-      loadListRows(LISTS.projects, (rows) => {
-        setData(prev => ({
-          ...prev,
-          projects: {
-            plan: rows.map(r => toNum(r.plan, 0)),
-            otkryto: rows.map(r => toNullableNum(r.open)),
-            zakryto: rows.map(r => toNullableNum(r.closed))
-          }
-        }));
-      });
-
-      // Load Education (84)
-      loadListRows(LISTS.edu, (rows) => {
-        setData(prev => ({
-          ...prev,
-          edu: {
-            plan: rows.map(r => toNum(r.plan, 0)),
-            fact: rows.map(r => toNullableNum(r.fact))
-          }
-        }));
-      });
-
-      // Load SMI mentions (85)
-      loadListRows(LISTS.smi, (rows) => {
-        setData(prev => ({
-          ...prev,
-          smi: {
-            weeks: rows.map(r => String(r.week)),
-            plan: rows.map(r => toNum(r.plan, 0)),
-            fact: rows.map(r => toNullableNum(r.fact))
-          }
-        }));
-      });
-
-      // Load Smeta / Costs (86)
-      loadListRows(LISTS.smeta, (rows) => {
-        setData(prev => {
-          let spent = prev.smeta.spent;
-          let contractedNotSpent = prev.smeta.contractedNotSpent;
-          let notContracted = prev.smeta.notContracted;
-
-          rows.forEach(r => {
-            const item = String(r.item).toLowerCase();
-            const amount = toNum(r.amount, 0);
-            if (item.includes('потрачено') || item.includes('освоено')) {
-              spent = amount;
-            } else if (item.includes('законтрактовано')) {
-              contractedNotSpent = amount;
-            } else if (item.includes('не законтрактовано')) {
-              notContracted = amount;
-            }
-          });
-
-          return {
-            ...prev,
-            smeta: {
-              total: spent + contractedNotSpent + notContracted,
-              spent,
-              contractedNotSpent,
-              notContracted
-            }
-          };
-        });
-      });
-
-      // Load Personnel (87)
-      loadListRows(LISTS.personnel, (rows) => {
-        const rckRow = rows[0] || { plan: 6, fact: 6 };
-        const cupppRow = rows[1] || { plan: 4, fact: 1 };
-        setData(prev => ({
-          ...prev,
-          rck: { plan: toNum(rckRow.plan, 6), fact: toNum(rckRow.fact, 6) },
-          cuppp: { plan: toNum(cupppRow.plan, 4), fact: toNum(cupppRow.fact, 1) }
-        }));
-      });
-
-      // Complete live load flag
-      const timer = setTimeout(() => setIsLiveLoading(false), 800);
-      return () => clearTimeout(timer);
-    }
-  }, []);
+    loadAllData();
+  }, [loadAllData]);
 
   const tabs = [
     { id: 'security', label: 'Безопасность', color: 'bg-red-500', shadowColor: 'rgba(239, 68, 68, 0.15)', hoverBg: 'hover:bg-red-500/5', activeText: 'text-red-400 bg-red-500/10 border-red-500/20', icon: ShieldCheck },
@@ -364,6 +432,8 @@ export default function App() {
     { id: 'costs', label: 'Затраты', color: 'bg-emerald-500', shadowColor: 'rgba(16, 185, 129, 0.15)', hoverBg: 'hover:bg-emerald-500/5', activeText: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20', icon: PiggyBank },
     { id: 'personnel', label: 'Персонал', color: 'bg-indigo-500', shadowColor: 'rgba(99, 102, 241, 0.15)', hoverBg: 'hover:bg-indigo-500/5', activeText: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20', icon: Users2 },
   ] as const;
+
+  const errorCount = Object.keys(loadErrors).length;
 
   return (
     <div className="min-h-screen bg-[#09090b] text-[#fafafa] py-8 px-4 md:px-8 font-sans antialiased">
@@ -393,7 +463,16 @@ export default function App() {
             <div className="flex flex-wrap items-center gap-4 text-xs text-[#a1a1aa] pt-1.5">
               <span className="flex items-center gap-1.5 bg-[#161619] px-3 py-1 rounded-full border border-[#27272a]">
                 <Clock className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Данные обновлены: <strong className="text-white">{new Date(data.updated).toLocaleDateString('ru-RU')}</strong></span>
+                <span>
+                  Данные обновлены:{' '}
+                  <strong className="text-white">
+                    {b24Detected
+                      ? (lastSyncedAt
+                          ? lastSyncedAt.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+                          : 'загрузка…')
+                      : new Date(data.updated).toLocaleDateString('ru-RU')}
+                  </strong>
+                </span>
               </span>
               <span className="flex items-center gap-1.5 bg-[#161619] px-3 py-1 rounded-full border border-[#27272a]">
                 <CheckCircle2 className="w-3.5 h-3.5 text-indigo-400" />
@@ -404,10 +483,22 @@ export default function App() {
 
           <div className="flex items-center gap-3">
             {b24Detected ? (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-sky-500/10 text-sky-400 text-xs font-semibold rounded-full border border-sky-500/25 shadow-[0_0_10px_rgba(14,165,233,0.1)]">
-                <RefreshCw className={`w-3.5 h-3.5 ${isLiveLoading ? 'animate-spin' : ''}`} />
-                Интеграция со Списками B24 Активна
-              </span>
+              <>
+                <button
+                  type="button"
+                  onClick={loadAllData}
+                  disabled={isLiveLoading}
+                  title="Перезагрузить данные из Списков Битрикс24"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800/60 hover:bg-zinc-800 text-zinc-300 text-xs font-medium rounded-full border border-zinc-700/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLiveLoading ? 'animate-spin' : ''}`} />
+                  Обновить
+                </button>
+                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-sky-500/10 text-sky-400 text-xs font-semibold rounded-full border border-sky-500/25 shadow-[0_0_10px_rgba(14,165,233,0.1)]">
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLiveLoading ? 'animate-spin' : ''}`} />
+                  Интеграция со Списками B24 Активна
+                </span>
+              </>
             ) : (
               <span className="inline-flex items-center gap-2 px-3 py-1.5 bg-zinc-800/60 text-zinc-400 text-xs font-medium rounded-full border border-zinc-700/60">
                 <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse shadow-[0_0_6px_#6366f1]" />
@@ -416,6 +507,33 @@ export default function App() {
             )}
           </div>
         </motion.header>
+
+        {/* Error banner: показывает, какие Списки не удалось загрузить */}
+        {errorCount > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="elegant-card rounded-2xl p-4 border border-amber-500/30 bg-amber-500/5 flex items-start gap-3"
+          >
+            <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-200/90 leading-relaxed">
+              <p className="font-semibold text-amber-300">
+                Не удалось обновить {errorCount === 1 ? 'раздел' : 'разделы'} из Списков Битрикс24 — показаны прежние данные:
+              </p>
+              <p className="mt-1">
+                {Object.entries(loadErrors).map(([key, message], idx) => (
+                  <span key={key}>
+                    {idx > 0 && ', '}
+                    <strong>{LIST_LABELS[key] || key}</strong> ({message})
+                  </span>
+                ))}
+              </p>
+              <p className="mt-1 text-amber-200/70">
+                Проверьте, что у приложения есть доступ к этим Спискам, и что их ID/структура не менялись.
+              </p>
+            </div>
+          </motion.div>
+        )}
 
         {/* Tab Navigation Menu */}
         <motion.nav 
@@ -515,7 +633,7 @@ export default function App() {
           <div className="space-y-1.5 text-xs text-[#a1a1aa] leading-relaxed">
             <h4 className="font-bold text-white">Как обновлять и синхронизировать показатели:</h4>
             <p>
-              Большинство аналитических показателей настраиваются в разделе <strong className="text-zinc-200">«Списки» Битрикс24</strong> (Штрафы по автопарку, показатели NPS, производственные планы по кварталам, статьи затрат по смете и штатное расписание). Изменения автоматически подтягиваются при открытии приложения.
+              Большинство аналитических показателей настраиваются в разделе <strong className="text-zinc-200">«Списки» Битрикс24</strong> (Штрафы по автопарку, показатели NPS, производственные планы по кварталам, статьи затрат по смете и штатное расписание). Изменения автоматически подтягиваются при открытии приложения — или сразу, если нажать «Обновить».
             </p>
             <p className="pt-1">
               Даты плановой сертификации и ключевых событий года, а также другие статические константы прописаны в структуру <code className="bg-[#1c1c1f] px-1.5 py-0.5 rounded text-indigo-400 border border-[#2d2d34] font-mono">/src/data.ts</code>. Счётчики безаварийных дней и дни до сертификации рассчитываются в реальном времени.
