@@ -33,10 +33,30 @@ export function isB24Available(): boolean {
   return typeof (window as any).BX24 !== 'undefined';
 }
 
+// Если портал не ответил за это время — считаем вызов зависшим и показываем
+// ошибку вместо бесконечного спиннера (реальная причина обычно — недостающее
+// право приложения на этот метод, например отсутствующий scope "lists").
+const CALL_TIMEOUT_MS = 20000;
+
 function callMethod<T = any>(method: string, params: Record<string, any> = {}): Promise<T> {
   const BX24 = getBX24();
   return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(
+        `Bitrix24 не ответил на ${method} за ${CALL_TIMEOUT_MS / 1000} с. ` +
+        'Проверьте, что приложению выдано право «lists» (Настройка прав в параметрах приложения), и попробуйте снова.'
+      ));
+    }, CALL_TIMEOUT_MS);
+
     BX24.callMethod(method, params, (result: any) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+
       if (result.error()) {
         const err = result.error();
         const message = (err && (err.ex?.error_description || err.error_description || err.error)) || 'неизвестная ошибка Bitrix24';
@@ -117,57 +137,6 @@ export async function deleteListElement(listId: number, elementId: number): Prom
     IBLOCK_ID: listId,
     ELEMENT_ID: elementId,
   });
-}
-
-/* ── Создание нового Списка и полей (продвинутый сценарий) ───
-   Используется только когда админ явно выбирает «Создать новый список»
-   в редакторе графика — по умолчанию редактор предлагает подключиться
-   к уже существующему Списку. */
-
-export interface NewListFieldSpec {
-  name: string;
-  type: 'S' | 'N' | 'S:DateTime';
-}
-
-export async function createList(name: string): Promise<number> {
-  const id = await callMethod<number | string>('lists.add', {
-    IBLOCK_TYPE_ID: 'lists',
-    NAME: name,
-    SECTIONS: 'N',
-  });
-  return Number(id);
-}
-
-export async function addListField(listId: number, field: NewListFieldSpec, sort: number): Promise<string> {
-  const fieldId = await callMethod<string>('lists.field.add', {
-    IBLOCK_TYPE_ID: 'lists',
-    IBLOCK_ID: listId,
-    FIELDS: {
-      NAME: field.name,
-      TYPE: field.type,
-      SORT: sort,
-      IS_REQUIRED: 'N',
-      MULTIPLE: 'N',
-    },
-  });
-  return fieldId;
-}
-
-/** Создаёт Список и все перечисленные поля по порядку; при ошибке на поле
- *  удаляет уже созданный Список, чтобы не оставлять «половинчатую» структуру. */
-export async function createListWithFields(name: string, fields: NewListFieldSpec[]): Promise<{ listId: number; fieldIds: string[] }> {
-  const listId = await createList(name);
-  const fieldIds: string[] = [];
-  try {
-    for (let i = 0; i < fields.length; i++) {
-      const fieldId = await addListField(listId, fields[i], (i + 1) * 100);
-      fieldIds.push(fieldId);
-    }
-  } catch (err) {
-    await callMethod('lists.delete', { IBLOCK_TYPE_ID: 'lists', IBLOCK_ID: listId }).catch(() => {});
-    throw err;
-  }
-  return { listId, fieldIds };
 }
 
 /* ── Настройки приложения (замена отдельной БД для конфигурации) ── */

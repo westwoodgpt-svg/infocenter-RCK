@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react';
 import {
-  ArrowUp, ArrowDown, Trash2, Plus, Eye, EyeOff, Pencil, X, Loader2, AlertTriangle,
+  ArrowUp, ArrowDown, Trash2, Plus, Eye, EyeOff, Pencil, X, Loader2, AlertTriangle, RefreshCw,
 } from 'lucide-react';
 import { ChartConfig, ChartFilter, ChartSeries, ChartType, TabConfig } from '../types';
-import {
-  getLists, getListFields, createListWithFields, B24ListInfo, B24Field, NewListFieldSpec,
-} from '../b24/client';
+import { getLists, getListFields, B24ListInfo, B24Field } from '../b24/client';
 
 const CHART_TYPE_LABELS: Record<ChartType, string> = {
   bar: 'Столбцы',
@@ -14,12 +12,6 @@ const CHART_TYPE_LABELS: Record<ChartType, string> = {
   pie: 'Круговая диаграмма',
   kpi: 'KPI-карточка (число)',
   table: 'Таблица',
-};
-
-const FIELD_TYPE_LABELS: Record<NewListFieldSpec['type'], string> = {
-  S: 'Текст',
-  N: 'Число',
-  'S:DateTime': 'Дата',
 };
 
 interface ChartsEditorProps {
@@ -91,7 +83,8 @@ export default function ChartsEditor({ charts, tabs, onChange }: ChartsEditorPro
       <p className="text-xs text-[#a1a1aa]">
         Пользовательские графики поверх Списков Б24. Встроенные графики пяти исходных вкладок
         пока редактируются только в коде — здесь управляются графики, добавленные через
-        редактор.
+        редактор. Источником может быть только уже существующий Список — если нужного ещё нет,
+        создайте его в разделе «Списки» Битрикс24, затем возвращайтесь сюда.
       </p>
 
       {sorted.length === 0 && (
@@ -166,40 +159,43 @@ function ChartForm({ chart, tabs, existingCount, onCancel, onSave }: ChartFormPr
   const [type, setType] = useState<ChartType>(chart?.type ?? 'bar');
   const [goal, setGoal] = useState(chart?.goal !== undefined ? String(chart.goal) : '');
 
-  const [sourceMode, setSourceMode] = useState<'existing' | 'new'>('existing');
   const [lists, setLists] = useState<B24ListInfo[]>([]);
   const [listsLoading, setListsLoading] = useState(false);
+  const [listsError, setListsError] = useState<string | null>(null);
+  const [listsReloadKey, setListsReloadKey] = useState(0);
+
   const [listId, setListId] = useState<number | null>(chart?.dataSource.listId ?? null);
   const [fields, setFields] = useState<B24Field[]>([]);
   const [fieldsLoading, setFieldsLoading] = useState(false);
+  const [fieldsError, setFieldsError] = useState<string | null>(null);
+  const [fieldsReloadKey, setFieldsReloadKey] = useState(0);
+
   const [nameField, setNameField] = useState(chart?.dataSource.nameField ?? 'NAME');
   const [series, setSeries] = useState<ChartSeries[]>(chart?.dataSource.series ?? []);
   const [filters, setFilters] = useState<ChartFilter[]>(chart?.dataSource.filters ?? []);
 
-  const [newListName, setNewListName] = useState('');
-  const [newFields, setNewFields] = useState<NewListFieldSpec[]>([{ name: 'Значение', type: 'N' }]);
-  const [creatingList, setCreatingList] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
   useEffect(() => {
-    if (sourceMode !== 'existing') return;
     let cancelled = false;
     setListsLoading(true);
-    getLists().then((r) => { if (!cancelled) setLists(r); })
-      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : 'Не удалось получить Списки'); })
+    setListsError(null);
+    getLists()
+      .then((r) => { if (!cancelled) setLists(r); })
+      .catch((e) => { if (!cancelled) setListsError(e instanceof Error ? e.message : 'Не удалось получить Списки'); })
       .finally(() => { if (!cancelled) setListsLoading(false); });
     return () => { cancelled = true; };
-  }, [sourceMode]);
+  }, [listsReloadKey]);
 
   useEffect(() => {
     if (!listId) { setFields([]); return; }
     let cancelled = false;
     setFieldsLoading(true);
-    getListFields(listId).then((r) => { if (!cancelled) setFields(r); })
-      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : 'Не удалось получить поля Списка'); })
+    setFieldsError(null);
+    getListFields(listId)
+      .then((r) => { if (!cancelled) setFields(r); })
+      .catch((e) => { if (!cancelled) setFieldsError(e instanceof Error ? e.message : 'Не удалось получить поля Списка'); })
       .finally(() => { if (!cancelled) setFieldsLoading(false); });
     return () => { cancelled = true; };
-  }, [listId]);
+  }, [listId, fieldsReloadKey]);
 
   const addSeries = () => {
     const key = `s${series.length}_${Date.now()}`;
@@ -216,35 +212,6 @@ function ChartForm({ chart, tabs, existingCount, onCancel, onSave }: ChartFormPr
     setFilters(filters.map((f, i) => (i === idx ? { ...f, ...patch } : f)));
   };
   const removeFilter = (idx: number) => setFilters(filters.filter((_, i) => i !== idx));
-
-  const addNewField = () => setNewFields([...newFields, { name: '', type: 'N' }]);
-  const updateNewField = (idx: number, patch: Partial<NewListFieldSpec>) => {
-    setNewFields(newFields.map((f, i) => (i === idx ? { ...f, ...patch } : f)));
-  };
-  const removeNewField = (idx: number) => setNewFields(newFields.filter((_, i) => i !== idx));
-
-  const createNewList = async () => {
-    if (!newListName.trim() || newFields.some((f) => !f.name.trim())) {
-      setError('Укажите имя списка и названия всех полей');
-      return;
-    }
-    setCreatingList(true);
-    setError(null);
-    try {
-      const { listId: createdId, fieldIds } = await createListWithFields(newListName.trim(), newFields);
-      setListId(createdId);
-      setNameField('NAME');
-      setSeries(newFields.map((f, i) => ({ key: `s${i}_${Date.now()}`, label: f.name, field: fieldIds[i] })));
-      setSourceMode('existing');
-      // подтягиваем поля только что созданного списка, чтобы форма ниже вела себя как с обычным списком
-      const created = await getListFields(createdId);
-      setFields(created);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось создать список');
-    } finally {
-      setCreatingList(false);
-    }
-  };
 
   const canSave = title.trim() && tabId && listId && series.length > 0;
 
@@ -278,13 +245,6 @@ function ChartForm({ chart, tabs, existingCount, onCancel, onSave }: ChartFormPr
           <X className="w-4 h-4" />
         </button>
       </div>
-
-      {error && (
-        <div className="flex items-start gap-2 text-xs text-amber-300/90 bg-amber-500/5 border border-amber-500/20 rounded-xl p-3">
-          <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-400" />
-          <span>{error}</span>
-        </div>
-      )}
 
       <div className="grid grid-cols-2 gap-3">
         <label className="text-xs text-zinc-400 space-y-1">
@@ -320,75 +280,49 @@ function ChartForm({ chart, tabs, existingCount, onCancel, onSave }: ChartFormPr
         )}
       </div>
 
-      <div className="border-t border-[#1f1f23] pt-3 space-y-3">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-zinc-300">Источник данных</span>
-          <div className="flex gap-1 bg-[#0d0d0f] border border-[#27272a] rounded-lg p-0.5">
-            <button type="button" onClick={() => setSourceMode('existing')}
-              className={`px-2.5 py-1 text-xs rounded-md ${sourceMode === 'existing' ? 'bg-indigo-500/20 text-indigo-200' : 'text-zinc-400'}`}>
-              Существующий список
-            </button>
-            <button type="button" onClick={() => setSourceMode('new')}
-              className={`px-2.5 py-1 text-xs rounded-md ${sourceMode === 'new' ? 'bg-indigo-500/20 text-indigo-200' : 'text-zinc-400'}`}>
-              Создать новый список
-            </button>
-          </div>
+      <div className="border-t border-[#1f1f23] pt-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-semibold text-zinc-300">Источник данных — Список Б24</span>
+          <button type="button" onClick={() => setListsReloadKey((k) => k + 1)} disabled={listsLoading}
+            className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 disabled:opacity-40" title="Обновить список Списков">
+            <RefreshCw className={`w-3.5 h-3.5 ${listsLoading ? 'animate-spin' : ''}`} />
+          </button>
         </div>
 
-        {sourceMode === 'existing' && (
-          <div className="space-y-2">
-            <label className="text-xs text-zinc-400 space-y-1 block">
-              Список Б24 {listsLoading && <Loader2 className="inline w-3 h-3 animate-spin ml-1" />}
-              <select value={listId ?? ''} onChange={(e) => setListId(e.target.value ? Number(e.target.value) : null)}
-                className="w-full bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none focus:border-indigo-500/40">
-                <option value="">— выбрать —</option>
-                {lists.map((l) => <option key={l.id} value={l.id}>{l.name} (ID {l.id})</option>)}
-              </select>
-            </label>
-
-            {listId && (
-              <label className="text-xs text-zinc-400 space-y-1 block">
-                Поле для подписи (ось X) {fieldsLoading && <Loader2 className="inline w-3 h-3 animate-spin ml-1" />}
-                <select value={nameField} onChange={(e) => setNameField(e.target.value)}
-                  className="w-full bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none focus:border-indigo-500/40">
-                  <option value="NAME">NAME (стандартное название элемента)</option>
-                  {fields.map((f) => <option key={f.fieldId} value={f.fieldId}>{f.label} ({f.fieldId})</option>)}
-                </select>
-              </label>
-            )}
+        {listsError && (
+          <div className="flex items-start gap-2 text-xs text-amber-300/90 bg-amber-500/5 border border-amber-500/20 rounded-xl p-3">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-400" />
+            <span>{listsError}</span>
           </div>
         )}
 
-        {sourceMode === 'new' && (
-          <div className="space-y-2 bg-[#0d0d0f] border border-[#27272a] rounded-xl p-3">
+        <select value={listId ?? ''} onChange={(e) => setListId(e.target.value ? Number(e.target.value) : null)}
+          disabled={listsLoading}
+          className="w-full bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none focus:border-indigo-500/40 disabled:opacity-50">
+          <option value="">{listsLoading ? 'Загрузка списков…' : '— выбрать —'}</option>
+          {lists.map((l) => <option key={l.id} value={l.id}>{l.name} (ID {l.id})</option>)}
+        </select>
+
+        {listId && (
+          <>
+            {fieldsError && (
+              <div className="flex items-start gap-2 text-xs text-amber-300/90 bg-amber-500/5 border border-amber-500/20 rounded-xl p-3">
+                <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-400" />
+                <span>{fieldsError}</span>
+                <button type="button" onClick={() => setFieldsReloadKey((k) => k + 1)} className="ml-auto underline whitespace-nowrap">
+                  Повторить
+                </button>
+              </div>
+            )}
             <label className="text-xs text-zinc-400 space-y-1 block">
-              Название нового списка
-              <input value={newListName} onChange={(e) => setNewListName(e.target.value)}
-                className="w-full bg-[#161619] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none focus:border-indigo-500/40" />
+              Поле для подписи (ось X) {fieldsLoading && <Loader2 className="inline w-3 h-3 animate-spin ml-1" />}
+              <select value={nameField} onChange={(e) => setNameField(e.target.value)} disabled={fieldsLoading}
+                className="w-full bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none focus:border-indigo-500/40 disabled:opacity-50">
+                <option value="NAME">NAME (стандартное название элемента)</option>
+                {fields.map((f) => <option key={f.fieldId} value={f.fieldId}>{f.label} ({f.fieldId})</option>)}
+              </select>
             </label>
-            <div className="space-y-1.5">
-              <span className="text-xs text-zinc-500">Поля со значениями (стандартное поле NAME для названия строки уже есть в любом Списке)</span>
-              {newFields.map((f, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <input value={f.name} onChange={(e) => updateNewField(i, { name: e.target.value })} placeholder="Название поля"
-                    className="flex-1 bg-[#161619] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none focus:border-indigo-500/40" />
-                  <select value={f.type} onChange={(e) => updateNewField(i, { type: e.target.value as NewListFieldSpec['type'] })}
-                    className="bg-[#161619] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none">
-                    {(Object.keys(FIELD_TYPE_LABELS) as NewListFieldSpec['type'][]).map((t) => <option key={t} value={t}>{FIELD_TYPE_LABELS[t]}</option>)}
-                  </select>
-                  <button type="button" onClick={() => removeNewField(i)} disabled={newFields.length === 1}
-                    className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-400 disabled:opacity-20">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
-              <button type="button" onClick={addNewField} className="text-xs text-indigo-300 hover:text-indigo-200">+ ещё поле</button>
-            </div>
-            <button type="button" onClick={createNewList} disabled={creatingList}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-200 text-sm font-medium rounded-lg border border-indigo-500/30 disabled:opacity-40">
-              {creatingList && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Создать список и продолжить
-            </button>
-          </div>
+          </>
         )}
       </div>
 
@@ -412,6 +346,9 @@ function ChartForm({ chart, tabs, existingCount, onCancel, onSave }: ChartFormPr
           ))}
           <button type="button" onClick={addSeries} disabled={fields.length === 0}
             className="text-xs text-indigo-300 hover:text-indigo-200 disabled:opacity-40">+ добавить ряд</button>
+          {fields.length === 0 && !fieldsLoading && (
+            <p className="text-[11px] text-zinc-600">В этом Списке не нашлось дополнительных полей.</p>
+          )}
         </div>
       )}
 
