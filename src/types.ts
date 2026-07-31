@@ -73,4 +73,64 @@ export interface RckDashboardData {
   cuppp: PersonnelRatio;
 }
 
-export type TabId = 'security' | 'quality' | 'production' | 'costs' | 'personnel';
+export type BuiltinTabId = 'security' | 'quality' | 'production' | 'costs' | 'personnel';
+// Свободный TabId — вкладки, добавленные через редактор, получают собственные строковые id
+export type TabId = BuiltinTabId | (string & {});
+
+/* ── Редактор: конфигурация вкладок и графиков ───────────────
+   Хранится целиком в Bitrix24 (app.option), не в отдельной БД —
+   см. DEPLOYMENT.md и разбор архитектуры. */
+
+export interface TabConfig {
+  id: TabId;
+  label: string;
+  order: number;
+  visible: boolean;
+  /** Встроенная вкладка (пять исходных) — нельзя удалить, только скрыть/переименовать/переместить. */
+  builtin: boolean;
+}
+
+export type ChartType = 'bar' | 'line' | 'area' | 'pie' | 'kpi' | 'table';
+
+export interface ChartFilter {
+  field: string;
+  op: 'eq' | 'neq' | 'contains' | 'gte' | 'lte';
+  value: string;
+}
+
+export interface ChartSeries {
+  key: string;
+  label: string;
+  /** Логическое имя поля Списка ("NAME" либо "PROPERTY_123") */
+  field: string;
+  color?: string;
+}
+
+export interface ChartDataSource {
+  listId: number;
+  listName?: string;
+  /** Поле, используемое как подпись категории/оси X (обычно NAME или дата) */
+  nameField: string;
+  series: ChartSeries[];
+  filters?: ChartFilter[];
+}
+
+export interface ChartConfig {
+  id: string;
+  tabId: TabId;
+  order: number;
+  visible: boolean;
+  title: string;
+  subtitle?: string;
+  type: ChartType;
+  goal?: number;
+  dataSource: ChartDataSource;
+}
+
+export interface DashboardConfig {
+  version: number;
+  updatedAt?: string;
+  updatedBy?: string;
+  tabs: TabConfig[];
+  customCharts: ChartConfig[];
+}

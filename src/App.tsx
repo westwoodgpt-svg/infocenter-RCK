@@ -1,21 +1,27 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  ShieldCheck, 
-  Award, 
-  Settings, 
-  Clock, 
-  CheckCircle2, 
-  RefreshCw, 
-  TrendingUp, 
-  PiggyBank, 
+import {
+  ShieldCheck,
+  Award,
+  Settings,
+  Clock,
+  CheckCircle2,
+  RefreshCw,
+  TrendingUp,
+  PiggyBank,
   Users2,
+  LayoutGrid,
   AlertTriangle,
   Info
 } from 'lucide-react';
 
-import { RckDashboardData, TabId } from './types';
+import { RckDashboardData, TabId, BuiltinTabId } from './types';
 import { RCK_DATA } from './data';
+import { BUILTIN_LISTS as LISTS, BUILTIN_LIST_LABELS as LIST_LABELS } from './config/builtinLists';
+import { useDashboardConfig } from './config/useDashboardConfig';
+import { isB24Available, isCurrentUserAdmin } from './b24/client';
+import ChartCard from './components/ChartCard';
+import EditorPanel from './editor/EditorPanel';
 
 // Subcomponents
 import SecurityPanel from './components/SecurityPanel';
@@ -24,33 +30,20 @@ import ProductionPanel from './components/ProductionPanel';
 import CostsPanel from './components/CostsPanel';
 import PersonnelPanel from './components/PersonnelPanel';
 
-const LISTS = {
-  fines:          { id: 78, props: { car: 'PROPERTY_494', date: 'PROPERTY_495' } },
-  npsFabrika:     { id: 79, props: { company: 'PROPERTY_496', date: 'PROPERTY_497', fact: 'PROPERTY_498' } },
-  npsFabrikaOfis: { id: 80, props: { company: 'PROPERTY_499', date: 'PROPERTY_500', fact: 'PROPERTY_501' } },
-  npsTreningi:    { id: 81, props: { name: 'PROPERTY_502', fact: 'PROPERTY_503' } },
-  ibp:            { id: 82, props: { quarter: 'PROPERTY_504', plan: 'PROPERTY_505', prep: 'PROPERTY_506', ready: 'PROPERTY_507' } },
-  projects:       { id: 83, props: { quarter: 'PROPERTY_508', plan: 'PROPERTY_509', open: 'PROPERTY_510', closed: 'PROPERTY_511' } },
-  edu:            { id: 84, props: { quarter: 'PROPERTY_512', plan: 'PROPERTY_513', fact: 'PROPERTY_514' } },
-  smi:            { id: 85, props: { week: 'PROPERTY_515', plan: 'PROPERTY_516', fact: 'PROPERTY_517' } },
-  smeta:          { id: 86, props: { item: 'PROPERTY_518', amount: 'PROPERTY_519' } },
-  personnel:      { id: 87, props: { dept: 'PROPERTY_520', plan: 'PROPERTY_521', fact: 'PROPERTY_522' } },
-  events:         { id: 88, props: { date: 'PROPERTY_523' } }
+// Оформление (иконка/цвет) пяти встроенных вкладок. Порядок, видимость и подписи
+// вкладок задаются в config.tabs (редактор), а не здесь.
+const BUILTIN_TAB_META: Record<BuiltinTabId, { color: string; shadowColor: string; hoverBg: string; activeText: string; icon: typeof ShieldCheck }> = {
+  security:   { color: 'bg-red-500',     shadowColor: 'rgba(239, 68, 68, 0.15)',  hoverBg: 'hover:bg-red-500/5',     activeText: 'text-red-400 bg-red-500/10 border-red-500/20',         icon: ShieldCheck },
+  quality:    { color: 'bg-blue-500',    shadowColor: 'rgba(59, 130, 246, 0.15)', hoverBg: 'hover:bg-blue-500/5',    activeText: 'text-blue-400 bg-blue-500/10 border-blue-500/20',       icon: Award },
+  production: { color: 'bg-amber-500',   shadowColor: 'rgba(245, 158, 11, 0.15)', hoverBg: 'hover:bg-amber-500/5',   activeText: 'text-amber-400 bg-amber-500/10 border-amber-500/20',    icon: TrendingUp },
+  costs:      { color: 'bg-emerald-500', shadowColor: 'rgba(16, 185, 129, 0.15)', hoverBg: 'hover:bg-emerald-500/5', activeText: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20', icon: PiggyBank },
+  personnel:  { color: 'bg-indigo-500',  shadowColor: 'rgba(99, 102, 241, 0.15)', hoverBg: 'hover:bg-indigo-500/5',  activeText: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20', icon: Users2 },
 };
 
-// Человекочитаемые названия Списков — используются в баннере ошибок
-const LIST_LABELS: Record<string, string> = {
-  fines: 'Штрафы',
-  npsFabrika: 'NPS — Фабрика процессов',
-  npsFabrikaOfis: 'NPS — Фабрика офисных процессов',
-  npsTreningi: 'NPS — Тренинги',
-  ibp: 'Производство — ИБП',
-  projects: 'Производство — Проекты',
-  edu: 'Производство — Обучение',
-  smi: 'Производство — СМИ',
-  smeta: 'Затраты — Смета',
-  personnel: 'Персонал',
-  events: 'Ключевые события',
+// Вкладки, добавленные через редактор, получают нейтральное оформление
+const DEFAULT_TAB_META = {
+  color: 'bg-zinc-500', shadowColor: 'rgba(113, 113, 122, 0.15)', hoverBg: 'hover:bg-zinc-500/5',
+  activeText: 'text-zinc-300 bg-zinc-500/10 border-zinc-500/20', icon: LayoutGrid,
 };
 
 export default function App() {
@@ -69,6 +62,11 @@ export default function App() {
 
   // Список ключей Списков, которые не удалось загрузить в последний раз (для баннера ошибок)
   const [loadErrors, setLoadErrors] = useState<Record<string, string>>({});
+
+  // Конфигурация вкладок/графиков редактора — хранится в app.option Bitrix24, не в отдельной БД
+  const { config: dashboardConfig, save: saveDashboardConfig } = useDashboardConfig();
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [canEdit, setCanEdit] = useState(!isB24Available());
 
   // Formatting date for subtitle
   const formattedToday = useMemo(() => {
@@ -480,13 +478,41 @@ export default function App() {
     loadAllData();
   }, [loadAllData]);
 
-  const tabs = [
-    { id: 'security', label: 'Безопасность', color: 'bg-red-500', shadowColor: 'rgba(239, 68, 68, 0.15)', hoverBg: 'hover:bg-red-500/5', activeText: 'text-red-400 bg-red-500/10 border-red-500/20', icon: ShieldCheck },
-    { id: 'quality', label: 'Качество', color: 'bg-blue-500', shadowColor: 'rgba(59, 130, 246, 0.15)', hoverBg: 'hover:bg-blue-500/5', activeText: 'text-blue-400 bg-blue-500/10 border-blue-500/20', icon: Award },
-    { id: 'production', label: 'Производство', color: 'bg-amber-500', shadowColor: 'rgba(245, 158, 11, 0.15)', hoverBg: 'hover:bg-amber-500/5', activeText: 'text-amber-400 bg-amber-500/10 border-amber-500/20', icon: TrendingUp },
-    { id: 'costs', label: 'Затраты', color: 'bg-emerald-500', shadowColor: 'rgba(16, 185, 129, 0.15)', hoverBg: 'hover:bg-emerald-500/5', activeText: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20', icon: PiggyBank },
-    { id: 'personnel', label: 'Персонал', color: 'bg-indigo-500', shadowColor: 'rgba(99, 102, 241, 0.15)', hoverBg: 'hover:bg-indigo-500/5', activeText: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20', icon: Users2 },
-  ] as const;
+  // Кнопка «Редактировать» — гейт по правам администратора портала (только когда
+  // приложение реально открыто внутри Б24; в автономном режиме доступна всем для просмотра UI).
+  useEffect(() => {
+    if (!isB24Available()) return;
+    isCurrentUserAdmin().then(setCanEdit);
+  }, []);
+
+  // Вид (иконка/цвет) пяти встроенных вкладок — сами вкладки (порядок, видимость,
+  // подпись) теперь приходят из конфигурации редактора (config.tabs).
+  const tabs = useMemo(() => {
+    return dashboardConfig.tabs
+      .filter((t) => t.visible)
+      .sort((a, b) => a.order - b.order)
+      .map((t) => ({
+        id: t.id,
+        label: t.label,
+        ...(BUILTIN_TAB_META[t.id as BuiltinTabId] || DEFAULT_TAB_META),
+      }));
+  }, [dashboardConfig.tabs]);
+
+  useEffect(() => {
+    if (tabs.length && !tabs.some((t) => t.id === activeTab)) {
+      setActiveTab(tabs[0].id);
+    }
+  }, [tabs, activeTab]);
+
+  // Пользовательские графики, добавленные через редактор для текущей вкладки
+  const customChartsForActiveTab = useMemo(() => {
+    return dashboardConfig.customCharts
+      .filter((c) => c.tabId === activeTab && c.visible)
+      .sort((a, b) => a.order - b.order);
+  }, [dashboardConfig.customCharts, activeTab]);
+
+  const isBuiltinPanelTab = (id: TabId): id is BuiltinTabId =>
+    id === 'security' || id === 'quality' || id === 'production' || id === 'costs' || id === 'personnel';
 
   const errorCount = Object.keys(loadErrors).length;
 
@@ -561,6 +587,17 @@ export default function App() {
                 <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse shadow-[0_0_6px_#6366f1]" />
                 Автономный режим (Файл данных)
               </span>
+            )}
+            {canEdit && (
+              <button
+                type="button"
+                onClick={() => setEditorOpen(true)}
+                title="Настроить вкладки, графики и события"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 text-xs font-semibold rounded-full border border-indigo-500/25 transition-colors"
+              >
+                <Settings className="w-3.5 h-3.5" />
+                Редактировать
+              </button>
             )}
           </div>
         </motion.header>
@@ -668,10 +705,24 @@ export default function App() {
                 />
               )}
               {activeTab === 'personnel' && (
-                <PersonnelPanel 
-                  rck={data.rck} 
-                  cuppp={data.cuppp} 
+                <PersonnelPanel
+                  rck={data.rck}
+                  cuppp={data.cuppp}
                 />
+              )}
+
+              {!isBuiltinPanelTab(activeTab) && customChartsForActiveTab.length === 0 && (
+                <div className="elegant-card rounded-3xl p-10 text-center text-sm text-[#71717a]">
+                  На этой вкладке пока нет графиков — добавьте их через «Редактировать».
+                </div>
+              )}
+
+              {customChartsForActiveTab.length > 0 && (
+                <div className={isBuiltinPanelTab(activeTab) ? 'grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6' : 'grid grid-cols-1 lg:grid-cols-2 gap-6'}>
+                  {customChartsForActiveTab.map((chart) => (
+                    <ChartCard key={chart.id} config={chart} />
+                  ))}
+                </div>
               )}
             </motion.div>
           </AnimatePresence>
@@ -695,10 +746,22 @@ export default function App() {
             <p className="pt-1">
               Даты плановой сертификации и ключевых событий года, а также другие статические константы прописаны в структуру <code className="bg-[#1c1c1f] px-1.5 py-0.5 rounded text-indigo-400 border border-[#2d2d34] font-mono">/src/data.ts</code>. Счётчики безаварийных дней и дни до сертификации рассчитываются в реальном времени.
             </p>
+            <p className="pt-1">
+              Вкладки, пользовательские графики и события теперь можно настраивать через кнопку <strong className="text-zinc-200">«Редактировать»</strong> в шапке (видна администраторам портала) — изменения сохраняются в настройках приложения Bitrix24.
+            </p>
           </div>
         </motion.footer>
 
       </div>
+
+      {editorOpen && (
+        <EditorPanel
+          config={dashboardConfig}
+          onSave={saveDashboardConfig}
+          onClose={() => setEditorOpen(false)}
+          onEventsChanged={loadAllData}
+        />
+      )}
     </div>
   );
 }
