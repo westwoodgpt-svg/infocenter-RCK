@@ -16,6 +16,7 @@ import {
 
 import { RckDashboardData, TabId } from './types';
 import { RCK_DATA } from './data';
+import logoHeader from './assets/logo-header.svg';
 
 // Subcomponents
 import SecurityPanel from './components/SecurityPanel';
@@ -507,13 +508,7 @@ export default function App() {
             </div>
             <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-white font-display flex flex-wrap items-center gap-x-3 gap-y-1.5">
               Инфоцентр
-              <span className="font-mono font-black tracking-tighter flex items-center text-lg md:text-2xl select-none px-2.5 py-0.5 bg-zinc-900 rounded-xl border border-[#27272a] shadow-[0_0_15px_rgba(14,165,233,0.05)]">
-                <span className="text-sky-400">&lt;</span>
-                <span className="text-white">|</span>
-                <span className="text-sky-400">&gt;</span>
-                <span className="text-white ml-1">ЦК</span>
-                <span className="text-[#f43f5e] ml-1">&gt;</span>
-              </span>
+              <img src={logoHeader} alt="РЦК" className="h-6 md:h-7 w-auto" />
             </h1>
             <div className="flex flex-wrap items-center gap-4 text-xs text-[#a1a1aa] pt-1.5">
               <span className="flex items-center gap-1.5 bg-[#161619] px-3 py-1 rounded-full border border-[#27272a]">
