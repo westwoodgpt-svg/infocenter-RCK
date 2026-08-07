@@ -101,7 +101,7 @@ export default function App() {
   const sharedWarning = isShared ? ' Это отразится у всех пользователей портала.' : '';
 
   const handleReset = () => {
-    if (confirm(`Восстановить пустой инфоцентр? Текущие карточки на всех вкладках будут удалены.${sharedWarning}`)) {
+    if (confirm(`Восстановить данные РЦК на 09.07.2026? Текущие карточки на всех вкладках будут заменены.${sharedWarning}`)) {
       resetToSeed();
       setMenuOpen(false);
     }
@@ -214,7 +214,7 @@ export default function App() {
                     <Upload className="w-4 h-4 text-blue-400" /> Импортировать JSON
                   </button>
                   <button onClick={handleReset} className="w-full flex items-center gap-2.5 px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800/60 transition-colors border-t border-[#1f1f23]">
-                    <RotateCcw className="w-4 h-4 text-amber-400" /> Собрать инфоцентр с нуля
+                    <RotateCcw className="w-4 h-4 text-amber-400" /> Сбросить к данным РЦК
                   </button>
                   <button onClick={handleClear} className="w-full flex items-center gap-2.5 px-4 py-3 text-sm text-rose-300 hover:bg-rose-500/10 transition-colors border-t border-[#1f1f23]">
                     <Eraser className="w-4 h-4" /> Очистить всё (пустой инфоцентр)
