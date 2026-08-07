@@ -1,76 +1,71 @@
-export interface FineItem {
-  car: string;
-  lastFine: string; // ISO date string or similar format "YYYY-MM-DD"
+export type TabId = 'security' | 'quality' | 'production' | 'costs' | 'personnel';
+
+export type ChartType = 'bar' | 'line' | 'area' | 'pie';
+
+export type CardType = 'kpi' | 'chart' | 'money' | 'list' | 'person';
+
+interface BaseCard {
+  id: string;
+  type: CardType;
+  title: string;
+  subtitle?: string;
 }
 
-export interface EventItem {
-  name: string;
-  date: string; // "YYYY-MM-DD"
+export interface KpiCard extends BaseCard {
+  type: 'kpi';
+  planValue: string;
+  planDate?: string;
+  factValue: string;
+  factDate?: string;
+  percent: number | null;
 }
 
-export interface NpsGroup {
-  companies: string[];
-  dates: string[];
-  fact: number[];
-  goal: number;
+export interface ChartRow {
+  category: string;
+  values: number[];
 }
 
-export interface NpsTreningiGroup {
-  names: string[];
-  fact: number[];
-  goal: number;
+export interface ChartCard extends BaseCard {
+  type: 'chart';
+  chartType: ChartType;
+  seriesNames: string[];
+  rows: ChartRow[];
 }
 
-export interface ProductionProgress {
-  plan: number[];
-  gotovitsya: (number | null)[];
-  gotov: (number | null)[];
-}
-
-export interface ProductionProjects {
-  plan: number[];
-  otkryto: (number | null)[];
-  zakryto: (number | null)[];
-}
-
-export interface ProductionEdu {
-  plan: number[];
-  fact: (number | null)[];
-}
-
-export interface ProductionSmi {
-  weeks: string[];
-  plan: number[];
-  fact: (number | null)[];
-}
-
-export interface Smeta {
-  total: number;
-  contractedNotSpent: number;
-  spent: number;
-  notContracted: number;
-}
-
-export interface PersonnelRatio {
+export interface MoneyCard extends BaseCard {
+  type: 'money';
   plan: number;
   fact: number;
 }
 
-export interface RckDashboardData {
-  updated: string;
-  fines: FineItem[];
-  certification: string;
-  events: EventItem[];
-  npsFabrika: NpsGroup;
-  npsFabrikaOfis: NpsGroup;
-  npsTreningi: NpsTreningiGroup;
-  ibp: ProductionProgress;
-  projects: ProductionProjects;
-  edu: ProductionEdu;
-  smi: ProductionSmi;
-  smeta: Smeta;
-  rck: PersonnelRatio;
-  cuppp: PersonnelRatio;
+export interface ListCard extends BaseCard {
+  type: 'list';
+  items: string[];
 }
 
-export type TabId = 'security' | 'quality' | 'production' | 'costs' | 'personnel';
+export interface PersonCard extends BaseCard {
+  type: 'person';
+  role: string;
+  tags: string[];
+  note?: string;
+  photoUrl?: string;
+}
+
+export type AnyCard = KpiCard | ChartCard | MoneyCard | ListCard | PersonCard;
+
+export type DashboardState = Record<TabId, AnyCard[]>;
+
+export const CARD_TYPE_LABELS: Record<CardType, string> = {
+  kpi: 'KPI (план/факт/%)',
+  chart: 'График',
+  money: 'Смета (план/факт)',
+  list: 'Список',
+  person: 'Ответственный',
+};
+
+export const CHART_TYPE_LABELS: Record<ChartType, string> = {
+  bar: 'Столбчатый',
+  line: 'Линейный',
+  area: 'С областями',
+  pie: 'Круговой',
+};

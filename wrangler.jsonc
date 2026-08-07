@@ -9,5 +9,16 @@
     "binding": "ASSETS",
     // POST от Битрикс24 должен попадать в worker.js, а не в слой статики (иначе 405)
     "run_worker_first": true
-  }
+  },
+  // Общее хранилище для редактора карточек: сервисный токен администратора
+  // портала (для записи в app.option от имени любого сотрудника) и
+  // диагностика последней попытки его поймать. Создать namespace один раз:
+  // `npx wrangler kv namespace create RCK_KV`, затем вставить выданный id
+  // сюда (см. DEPLOYMENT.md — «Обязательная настройка на Cloudflare»).
+  "kv_namespaces": [
+    {
+      "binding": "RCK_KV",
+      "id": "REPLACE_WITH_KV_NAMESPACE_ID"
+    }
+  ]
 }
