@@ -103,7 +103,7 @@ export function fetchDashboardOption(): Promise<{ state: DashboardState | null; 
 // только администраторам портала), а через наш серверный эндпоинт: он
 // проверяет, что у вызывающего есть действующая сессия портала, и пишет в
 // app.option от имени отдельного сервисного (администраторского) токена —
-// так редактировать может любой сотрудник. См. worker.js.
+// так редактировать может любой сотрудник. См. api/_bitrixAuth.js.
 export async function saveDashboardOption(state: DashboardState): Promise<{ ok: boolean; error: string | null }> {
   if (!hasBX24()) {
     return { ok: false, error: 'нет соединения с Битрикс24' };
