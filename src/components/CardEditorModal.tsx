@@ -13,9 +13,11 @@ import {
   MoneyCard,
   ListCard,
   PersonCard,
+  EventCard,
 } from '../types';
 import { newCardId } from '../store';
 import { usePortalUsers } from '../usePortalUsers';
+import { isInIframe } from '../bitrix';
 
 interface CardEditorModalProps {
   open: boolean;
@@ -24,7 +26,7 @@ interface CardEditorModalProps {
   onSave: (card: AnyCard) => void;
 }
 
-const CARD_TYPES: CardType[] = ['kpi', 'chart', 'money', 'list', 'person'];
+const CARD_TYPES: CardType[] = ['kpi', 'chart', 'money', 'list', 'person', 'event'];
 const CHART_TYPES: ChartType[] = ['bar', 'line', 'area', 'pie'];
 
 function blankCard(type: CardType): AnyCard {
@@ -46,6 +48,8 @@ function blankCard(type: CardType): AnyCard {
       return { ...base, type: 'list', items: [] } as ListCard;
     case 'person':
       return { ...base, type: 'person', role: '', tags: [], note: '' } as PersonCard;
+    case 'event':
+      return { ...base, type: 'event', date: '' } as EventCard;
   }
 }
 
@@ -60,7 +64,7 @@ function labelCls() {
 export default function CardEditorModal({ open, editingCard, onClose, onSave }: CardEditorModalProps) {
   const [pickedType, setPickedType] = useState<CardType | null>(editingCard?.type ?? null);
   const [draft, setDraft] = useState<AnyCard | null>(editingCard);
-  const { users: portalUsers } = usePortalUsers();
+  const { users: portalUsers, loading: portalUsersLoading, error: portalUsersError } = usePortalUsers();
   const isPersonPicker = pickedType === 'person' && portalUsers.length > 0;
 
   useMemo(() => {
@@ -75,7 +79,8 @@ export default function CardEditorModal({ open, editingCard, onClose, onSave }: 
     setDraft(blankCard(t));
   };
 
-  const canSave = draft && draft.title.trim().length > 0;
+  const canSave =
+    !!draft && draft.title.trim().length > 0 && (draft.type !== 'event' || draft.date.trim().length > 0);
 
   const handleSave = () => {
     if (!draft || !canSave) return;
@@ -135,7 +140,9 @@ export default function CardEditorModal({ open, editingCard, onClose, onSave }: 
                   </div>
 
                   <div>
-                    <label className={labelCls()}>{draft.type === 'person' ? 'ФИО' : 'Заголовок'}</label>
+                    <label className={labelCls()}>
+                      {draft.type === 'person' ? 'ФИО' : draft.type === 'event' ? 'Название события' : 'Заголовок'}
+                    </label>
                     <input
                       className={inputCls()}
                       value={draft.title}
@@ -143,23 +150,24 @@ export default function CardEditorModal({ open, editingCard, onClose, onSave }: 
                       onChange={(e) => {
                         const title = e.target.value;
                         if (draft.type === 'person') {
-                          const matched = portalUsers.find((u) => u.name === title);
+                          const normalized = title.trim().toLowerCase();
+                          const matched = portalUsers.find((u) => u.name.trim().toLowerCase() === normalized);
                           setDraft({
                             ...draft,
                             title,
-                            role: matched && !draft.role ? matched.position : draft.role,
+                            role: matched ? matched.position || draft.role : draft.role,
                             photoUrl: matched ? matched.photo : draft.photoUrl,
                           });
                           return;
                         }
                         setDraft({ ...draft, title });
                       }}
-                      placeholder={draft.type === 'person' ? 'Иванов Иван Иванович' : 'Название карточки'}
+                      placeholder={draft.type === 'person' ? 'Иванов Иван Иванович' : draft.type === 'event' ? 'Сертификация РЦК' : 'Название карточки'}
                     />
                     {isPersonPicker && (
                       <>
                         <p className="text-[11px] text-[#71717a] mt-1">
-                          Начните вводить — подставим сотрудников портала ({portalUsers.length})
+                          Выберите из списка — подставим сотрудников портала ({portalUsers.length})
                         </p>
                         <datalist id="employee-options">
                           {portalUsers.map((u) => (
@@ -168,15 +176,28 @@ export default function CardEditorModal({ open, editingCard, onClose, onSave }: 
                         </datalist>
                       </>
                     )}
+                    {draft.type === 'person' && !isPersonPicker && (
+                      <p className="text-[11px] text-amber-400/80 mt-1">
+                        {portalUsersLoading
+                          ? 'Загружаем сотрудников портала…'
+                          : portalUsersError
+                          ? `Не удалось получить сотрудников портала: ${portalUsersError}. Введите ФИО, должность и фото вручную.`
+                          : isInIframe()
+                          ? 'Сотрудники портала не найдены — проверьте, что у приложения есть право на чтение пользователей (user.get) в настройках локального приложения Битрикс24, и переоткройте инфоцентр.'
+                          : 'Автоподстановка сотрудников доступна только внутри Битрикс24 — вне портала введите данные вручную.'}
+                      </p>
+                    )}
                   </div>
 
                   <div>
-                    <label className={labelCls()}>Подзаголовок (необязательно)</label>
+                    <label className={labelCls()}>
+                      {draft.type === 'event' ? 'Описание (необязательно)' : 'Подзаголовок (необязательно)'}
+                    </label>
                     <input
                       className={inputCls()}
                       value={draft.subtitle ?? ''}
                       onChange={(e) => setDraft({ ...draft, subtitle: e.target.value })}
-                      placeholder="Реквизиты, период, ответственный…"
+                      placeholder={draft.type === 'event' ? 'Что за событие, где и для кого…' : 'Реквизиты, период, ответственный…'}
                     />
                   </div>
 
@@ -185,6 +206,7 @@ export default function CardEditorModal({ open, editingCard, onClose, onSave }: 
                   {draft.type === 'money' && <MoneyFields draft={draft} setDraft={setDraft} />}
                   {draft.type === 'list' && <ListFields draft={draft} setDraft={setDraft} />}
                   {draft.type === 'person' && <PersonFields draft={draft} setDraft={setDraft} />}
+                  {draft.type === 'event' && <EventFields draft={draft} setDraft={setDraft} />}
                 </>
               )
             )}
@@ -239,6 +261,23 @@ function KpiFields({ draft, setDraft }: { draft: KpiCard; setDraft: (c: AnyCard)
           onChange={(e) => setDraft({ ...draft, percent: e.target.value === '' ? null : Number(e.target.value) })}
         />
       </div>
+    </div>
+  );
+}
+
+function EventFields({ draft, setDraft }: { draft: EventCard; setDraft: (c: AnyCard) => void }) {
+  return (
+    <div>
+      <label className={labelCls()}>Дата события</label>
+      <input
+        type="date"
+        className={inputCls()}
+        value={draft.date}
+        onChange={(e) => setDraft({ ...draft, date: e.target.value })}
+      />
+      <p className="text-[11px] text-[#71717a] mt-1">
+        Счётчик дней до/после события считается автоматически от текущей даты.
+      </p>
     </div>
   );
 }

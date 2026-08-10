@@ -4,6 +4,7 @@ import ChartCardView from './ChartCardView';
 import MoneyCardView from './MoneyCardView';
 import ListCardView from './ListCardView';
 import PersonCardView from './PersonCardView';
+import EventCardView from './EventCardView';
 
 export default function CardView({ card }: { card: AnyCard }) {
   switch (card.type) {
@@ -17,6 +18,8 @@ export default function CardView({ card }: { card: AnyCard }) {
       return <ListCardView card={card} />;
     case 'person':
       return <PersonCardView card={card} />;
+    case 'event':
+      return <EventCardView card={card} />;
     default:
       return null;
   }

@@ -2,7 +2,7 @@ export type TabId = 'security' | 'quality' | 'production' | 'costs' | 'personnel
 
 export type ChartType = 'bar' | 'line' | 'area' | 'pie';
 
-export type CardType = 'kpi' | 'chart' | 'money' | 'list' | 'person';
+export type CardType = 'kpi' | 'chart' | 'money' | 'list' | 'person' | 'event';
 
 interface BaseCard {
   id: string;
@@ -51,7 +51,12 @@ export interface PersonCard extends BaseCard {
   photoUrl?: string;
 }
 
-export type AnyCard = KpiCard | ChartCard | MoneyCard | ListCard | PersonCard;
+export interface EventCard extends BaseCard {
+  type: 'event';
+  date: string; // "YYYY-MM-DD"
+}
+
+export type AnyCard = KpiCard | ChartCard | MoneyCard | ListCard | PersonCard | EventCard;
 
 export type DashboardState = Record<TabId, AnyCard[]>;
 
@@ -61,6 +66,7 @@ export const CARD_TYPE_LABELS: Record<CardType, string> = {
   money: 'Смета (план/факт)',
   list: 'Список',
   person: 'Ответственный',
+  event: 'Событие',
 };
 
 export const CHART_TYPE_LABELS: Record<ChartType, string> = {

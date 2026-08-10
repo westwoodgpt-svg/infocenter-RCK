@@ -19,6 +19,7 @@ export default function PersonCardView({ card }: { card: PersonCard }) {
         <div>
           <h3 className="text-base font-bold text-white font-display">{card.title}</h3>
           <p className="text-xs text-indigo-400 font-medium mt-0.5">{card.role}</p>
+          {card.subtitle && <p className="text-[11px] text-[#71717a] mt-1">{card.subtitle}</p>}
         </div>
       </div>
 
