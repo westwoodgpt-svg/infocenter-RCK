@@ -19,7 +19,7 @@ import {
 } from 'recharts';
 import { BarChart3 } from 'lucide-react';
 import { ChartCard } from '../../types';
-import { colorFor } from './palette';
+import { colorFor, seriesColorFor } from './palette';
 
 export default function ChartCardView({ card }: { card: ChartCard }) {
   const data = useMemo(
@@ -89,7 +89,7 @@ export default function ChartCardView({ card }: { card: ChartCard }) {
                 <Tooltip contentStyle={{ background: '#161619', border: '1px solid #27272a', borderRadius: 12, fontSize: 12 }} />
                 <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, paddingTop: 10, color: '#fafafa' }} />
                 {card.seriesNames.map((name, i) => (
-                  <Line key={name} type="monotone" dataKey={name} stroke={colorFor(i)} strokeWidth={2.5} dot={{ r: 3 }} />
+                  <Line key={name} type="monotone" dataKey={name} stroke={seriesColorFor(card.seriesColors, i)} strokeWidth={2.5} dot={{ r: 3 }} />
                 ))}
               </LineChart>
             ) : card.chartType === 'area' ? (
@@ -100,21 +100,48 @@ export default function ChartCardView({ card }: { card: ChartCard }) {
                 <Tooltip contentStyle={{ background: '#161619', border: '1px solid #27272a', borderRadius: 12, fontSize: 12 }} />
                 <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, paddingTop: 10, color: '#fafafa' }} />
                 {card.seriesNames.map((name, i) => (
-                  <Area key={name} type="monotone" dataKey={name} stroke={colorFor(i)} fill={colorFor(i)} fillOpacity={0.2} strokeWidth={2.5} />
+                  <Area
+                    key={name}
+                    type="monotone"
+                    dataKey={name}
+                    stroke={seriesColorFor(card.seriesColors, i)}
+                    fill={seriesColorFor(card.seriesColors, i)}
+                    fillOpacity={0.2}
+                    strokeWidth={2.5}
+                  />
                 ))}
               </AreaChart>
             ) : (
               <ComposedChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1f1f23" />
-                <XAxis dataKey="name" tick={{ fill: '#a1a1aa', fontSize: 11 }} tickLine={false} axisLine={false} />
+                <XAxis xAxisId="bars" dataKey="name" tick={{ fill: '#a1a1aa', fontSize: 11 }} tickLine={false} axisLine={false} />
+                {/* Отдельная ось для линий той же ширины, но со scale="point" (без банд-паддинга у
+                    столбцов) — иначе линия останавливается в центре крайних столбцов, не доходя
+                    до краёв графика. */}
+                <XAxis xAxisId="line" dataKey="name" type="category" scale="point" padding={{ left: 0, right: 0 }} hide />
                 <YAxis tick={{ fill: '#a1a1aa', fontSize: 11 }} tickLine={false} axisLine={false} />
                 <Tooltip contentStyle={{ background: '#161619', border: '1px solid #27272a', borderRadius: 12, fontSize: 12 }} />
                 <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, paddingTop: 10, color: '#fafafa' }} />
                 {card.seriesNames.map((name, i) =>
                   isLineSeries(i) ? (
-                    <Line key={name} type="monotone" dataKey={name} stroke={colorFor(i)} strokeWidth={2.5} dot={{ r: 3 }} />
+                    <Line
+                      key={name}
+                      xAxisId="line"
+                      type="monotone"
+                      dataKey={name}
+                      stroke={seriesColorFor(card.seriesColors, i)}
+                      strokeWidth={2.5}
+                      dot={{ r: 3 }}
+                    />
                   ) : (
-                    <Bar key={name} dataKey={name} fill={colorFor(i)} radius={[4, 4, 0, 0]} barSize={Math.max(8, 32 / card.seriesNames.length)} />
+                    <Bar
+                      key={name}
+                      xAxisId="bars"
+                      dataKey={name}
+                      fill={seriesColorFor(card.seriesColors, i)}
+                      radius={[4, 4, 0, 0]}
+                      barSize={Math.max(8, 32 / card.seriesNames.length)}
+                    />
                   )
                 )}
               </ComposedChart>

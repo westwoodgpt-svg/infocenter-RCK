@@ -43,6 +43,8 @@ export interface ChartCard extends BaseCard {
    *  (совмещённая диаграмма, например «План» линией над «Факт» столбцами). Длина
    *  массива синхронизирована с seriesNames; отсутствующие элементы = false. */
   seriesAsLine?: boolean[];
+  /** Индекс ряда → цвет (hex). Отсутствующие элементы = цвет по умолчанию из палитры. */
+  seriesColors?: string[];
 }
 
 export interface MoneyCard extends BaseCard {

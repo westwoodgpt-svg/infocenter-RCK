@@ -21,6 +21,7 @@ import {
 import { newCardId } from '../store';
 import { usePortalUsers } from '../usePortalUsers';
 import { isInIframe } from '../bitrix';
+import { colorFor } from './cards/palette';
 
 interface CardEditorModalProps {
   open: boolean;
@@ -494,7 +495,8 @@ function ChartFields({ draft, setDraft }: { draft: ChartCard; setDraft: (c: AnyC
     const seriesNames = [...draft.seriesNames, `Ряд ${draft.seriesNames.length + 1}`];
     const rows = draft.rows.map((r) => ({ ...r, values: [...r.values, 0] }));
     const seriesAsLine = [...(draft.seriesAsLine ?? draft.seriesNames.map(() => false)), false];
-    setDraft({ ...draft, seriesNames, rows, seriesAsLine });
+    const seriesColors = [...(draft.seriesColors ?? draft.seriesNames.map((_, i) => colorFor(i))), colorFor(draft.seriesNames.length)];
+    setDraft({ ...draft, seriesNames, rows, seriesAsLine, seriesColors });
   };
 
   const removeSeries = (idx: number) => {
@@ -502,13 +504,20 @@ function ChartFields({ draft, setDraft }: { draft: ChartCard; setDraft: (c: AnyC
     const seriesNames = draft.seriesNames.filter((_, i) => i !== idx);
     const rows = draft.rows.map((r) => ({ ...r, values: r.values.filter((_, i) => i !== idx) }));
     const seriesAsLine = (draft.seriesAsLine ?? draft.seriesNames.map(() => false)).filter((_, i) => i !== idx);
-    setDraft({ ...draft, seriesNames, rows, seriesAsLine });
+    const seriesColors = (draft.seriesColors ?? draft.seriesNames.map((_, i) => colorFor(i))).filter((_, i) => i !== idx);
+    setDraft({ ...draft, seriesNames, rows, seriesAsLine, seriesColors });
   };
 
   const toggleSeriesLine = (idx: number, value: boolean) => {
     const seriesAsLine = draft.seriesNames.map((_, i) => (draft.seriesAsLine?.[i] ?? false));
     seriesAsLine[idx] = value;
     setDraft({ ...draft, seriesAsLine });
+  };
+
+  const setSeriesColor = (idx: number, color: string) => {
+    const seriesColors = draft.seriesNames.map((_, i) => (draft.seriesColors?.[i] ?? colorFor(i)));
+    seriesColors[idx] = color;
+    setDraft({ ...draft, seriesColors });
   };
 
   const setCategory = (rowIdx: number, category: string) => {
@@ -569,6 +578,15 @@ function ChartFields({ draft, setDraft }: { draft: ChartCard; setDraft: (c: AnyC
                 {draft.seriesNames.map((name, si) => (
                   <th key={si} className="p-2 min-w-[120px]">
                     <div className="flex items-center gap-1">
+                      {draft.chartType !== 'pie' && (
+                        <input
+                          type="color"
+                          title="Цвет ряда"
+                          className="w-5 h-5 rounded border border-[#27272a] bg-transparent p-0 flex-shrink-0 cursor-pointer"
+                          value={draft.seriesColors?.[si] ?? colorFor(si)}
+                          onChange={(e) => setSeriesColor(si, e.target.value)}
+                        />
+                      )}
                       <input
                         className="w-full bg-transparent border-b border-[#27272a] text-zinc-200 font-semibold px-1 py-0.5 focus:outline-none focus:border-indigo-500"
                         value={name}
