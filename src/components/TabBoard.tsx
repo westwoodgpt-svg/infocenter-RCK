@@ -52,7 +52,7 @@ export default function TabBoard({ tab, cards, editMode, onAdd, onUpdate, onDele
           </span>
           <p className="text-sm text-zinc-300 font-medium">На этой вкладке пока нет карточек</p>
           <p className="text-xs text-[#71717a] max-w-sm">
-            Добавьте первую карточку — KPI, график, смету, список или ответственного — и начните собирать инфоцентр.
+            Добавьте первую карточку — KPI, график, смету, список, ответственного или событие — и начните собирать инфоцентр.
           </p>
           {editMode && (
             <button
@@ -75,7 +75,8 @@ export default function TabBoard({ tab, cards, editMode, onAdd, onUpdate, onDele
               onMoveDown={() => onMove(tab, card.id, 1)}
               canMoveUp={idx > 0}
               canMoveDown={idx < cards.length - 1}
-              className={card.type === 'chart' ? 'xl:col-span-2' : ''}
+              className={card.type === 'chart' || card.type === 'events' ? 'xl:col-span-2' : ''}
+              indicator={card.indicator}
             >
               <CardView card={card} />
             </CardShell>

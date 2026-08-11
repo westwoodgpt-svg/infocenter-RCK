@@ -10,6 +10,7 @@ import {
   PieChart,
   Pie,
   Cell,
+  ComposedChart,
   XAxis,
   YAxis,
   Tooltip,
@@ -39,6 +40,7 @@ export default function ChartCardView({ card }: { card: ChartCard }) {
   }, [card]);
 
   const hasData = card.rows.length > 0 && card.seriesNames.length > 0;
+  const isLineSeries = (i: number) => card.chartType === 'bar' && (card.seriesAsLine?.[i] ?? false);
 
   return (
     <div className="p-6">
@@ -102,16 +104,20 @@ export default function ChartCardView({ card }: { card: ChartCard }) {
                 ))}
               </AreaChart>
             ) : (
-              <BarChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <ComposedChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1f1f23" />
                 <XAxis dataKey="name" tick={{ fill: '#a1a1aa', fontSize: 11 }} tickLine={false} axisLine={false} />
                 <YAxis tick={{ fill: '#a1a1aa', fontSize: 11 }} tickLine={false} axisLine={false} />
                 <Tooltip contentStyle={{ background: '#161619', border: '1px solid #27272a', borderRadius: 12, fontSize: 12 }} />
                 <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, paddingTop: 10, color: '#fafafa' }} />
-                {card.seriesNames.map((name, i) => (
-                  <Bar key={name} dataKey={name} fill={colorFor(i)} radius={[4, 4, 0, 0]} barSize={Math.max(8, 32 / card.seriesNames.length)} />
-                ))}
-              </BarChart>
+                {card.seriesNames.map((name, i) =>
+                  isLineSeries(i) ? (
+                    <Line key={name} type="monotone" dataKey={name} stroke={colorFor(i)} strokeWidth={2.5} dot={{ r: 3 }} />
+                  ) : (
+                    <Bar key={name} dataKey={name} fill={colorFor(i)} radius={[4, 4, 0, 0]} barSize={Math.max(8, 32 / card.seriesNames.length)} />
+                  )
+                )}
+              </ComposedChart>
             )}
           </ResponsiveContainer>
         </div>

@@ -8,12 +8,15 @@ import {
   CARD_TYPE_LABELS,
   ChartType,
   CHART_TYPE_LABELS,
+  IndicatorColor,
+  INDICATOR_COLOR_LABELS,
   KpiCard,
   ChartCard,
   MoneyCard,
   ListCard,
   PersonCard,
   EventCard,
+  EventsCard,
 } from '../types';
 import { newCardId } from '../store';
 import { usePortalUsers } from '../usePortalUsers';
@@ -26,7 +29,7 @@ interface CardEditorModalProps {
   onSave: (card: AnyCard) => void;
 }
 
-const CARD_TYPES: CardType[] = ['kpi', 'chart', 'money', 'list', 'person', 'event'];
+const CARD_TYPES: CardType[] = ['kpi', 'chart', 'money', 'list', 'person', 'event', 'events'];
 const CHART_TYPES: ChartType[] = ['bar', 'line', 'area', 'pie'];
 
 function blankCard(type: CardType): AnyCard {
@@ -41,6 +44,7 @@ function blankCard(type: CardType): AnyCard {
         chartType: 'bar',
         seriesNames: ['Значение'],
         rows: [{ category: 'Категория 1', values: [0] }],
+        seriesAsLine: [false],
       } as ChartCard;
     case 'money':
       return { ...base, type: 'money', plan: 0, fact: 0 } as MoneyCard;
@@ -50,6 +54,8 @@ function blankCard(type: CardType): AnyCard {
       return { ...base, type: 'person', role: '', tags: [], note: '' } as PersonCard;
     case 'event':
       return { ...base, type: 'event', date: '' } as EventCard;
+    case 'events':
+      return { ...base, type: 'events', items: [] } as EventsCard;
   }
 }
 
@@ -162,7 +168,7 @@ export default function CardEditorModal({ open, editingCard, onClose, onSave }: 
                         }
                         setDraft({ ...draft, title });
                       }}
-                      placeholder={draft.type === 'person' ? 'Иванов Иван Иванович' : draft.type === 'event' ? 'Сертификация РЦК' : 'Название карточки'}
+                      placeholder={draft.type === 'person' ? 'Иванов Иван Иванович' : draft.type === 'event' ? 'Сертификация РЦК' : draft.type === 'events' ? 'Ключевые события 2026' : 'Название карточки'}
                     />
                     {isPersonPicker && (
                       <>
@@ -207,6 +213,9 @@ export default function CardEditorModal({ open, editingCard, onClose, onSave }: 
                   {draft.type === 'list' && <ListFields draft={draft} setDraft={setDraft} />}
                   {draft.type === 'person' && <PersonFields draft={draft} setDraft={setDraft} />}
                   {draft.type === 'event' && <EventFields draft={draft} setDraft={setDraft} />}
+                  {draft.type === 'events' && <EventsFields draft={draft} setDraft={setDraft} />}
+
+                  <IndicatorField draft={draft} setDraft={setDraft} />
                 </>
               )
             )}
@@ -278,6 +287,89 @@ function EventFields({ draft, setDraft }: { draft: EventCard; setDraft: (c: AnyC
       <p className="text-[11px] text-[#71717a] mt-1">
         Счётчик дней до/после события считается автоматически от текущей даты.
       </p>
+    </div>
+  );
+}
+
+function EventsFields({ draft, setDraft }: { draft: EventsCard; setDraft: (c: AnyCard) => void }) {
+  const update = (items: EventsCard['items']) => setDraft({ ...draft, items });
+  return (
+    <div>
+      <label className={labelCls()}>События (несколько в одной карточке)</label>
+      <div className="space-y-2">
+        {draft.items.map((item, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <input
+              className={inputCls()}
+              value={item.title}
+              placeholder="Название события"
+              onChange={(e) => {
+                const next = [...draft.items];
+                next[i] = { ...next[i], title: e.target.value };
+                update(next);
+              }}
+            />
+            <input
+              type="date"
+              className={inputCls()}
+              value={item.date}
+              onChange={(e) => {
+                const next = [...draft.items];
+                next[i] = { ...next[i], date: e.target.value };
+                update(next);
+              }}
+            />
+            <button
+              onClick={() => update(draft.items.filter((_, idx) => idx !== i))}
+              className="p-2 text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors flex-shrink-0"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        ))}
+        <button
+          onClick={() => update([...draft.items, { title: '', date: '' }])}
+          className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-semibold mt-1"
+        >
+          <Plus className="w-3.5 h-3.5" /> Добавить событие
+        </button>
+      </div>
+      <p className="text-[11px] text-[#71717a] mt-2">
+        Карточка сама отсортирует события по дате и подпишет каждое «Завершено» / «Ближайшее» / «Планируется».
+      </p>
+    </div>
+  );
+}
+
+function IndicatorField({ draft, setDraft }: { draft: AnyCard; setDraft: (c: AnyCard) => void }) {
+  const indicator = draft.indicator ?? { enabled: false, color: 'emerald' as IndicatorColor };
+  return (
+    <div className="border-t border-[#1f1f23] pt-4">
+      <label className="flex items-center gap-2 text-[11px] font-semibold text-[#71717a] uppercase tracking-wide">
+        <input
+          type="checkbox"
+          checked={indicator.enabled}
+          onChange={(e) => setDraft({ ...draft, indicator: { ...indicator, enabled: e.target.checked } })}
+        />
+        Индикатор статуса («светофор») в углу карточки
+      </label>
+      {indicator.enabled && (
+        <div className="flex flex-wrap gap-2 mt-2">
+          {(Object.keys(INDICATOR_COLOR_LABELS) as IndicatorColor[]).map((c) => (
+            <button
+              key={c}
+              onClick={() => setDraft({ ...draft, indicator: { ...indicator, color: c } })}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                indicator.color === c
+                  ? 'bg-indigo-500/15 border-indigo-500/40 text-indigo-300'
+                  : 'bg-[#161619] border-[#27272a] text-zinc-400 hover:text-white'
+              }`}
+            >
+              {INDICATOR_COLOR_LABELS[c]}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -401,14 +493,22 @@ function ChartFields({ draft, setDraft }: { draft: ChartCard; setDraft: (c: AnyC
   const addSeries = () => {
     const seriesNames = [...draft.seriesNames, `Ряд ${draft.seriesNames.length + 1}`];
     const rows = draft.rows.map((r) => ({ ...r, values: [...r.values, 0] }));
-    setDraft({ ...draft, seriesNames, rows });
+    const seriesAsLine = [...(draft.seriesAsLine ?? draft.seriesNames.map(() => false)), false];
+    setDraft({ ...draft, seriesNames, rows, seriesAsLine });
   };
 
   const removeSeries = (idx: number) => {
     if (draft.seriesNames.length <= 1) return;
     const seriesNames = draft.seriesNames.filter((_, i) => i !== idx);
     const rows = draft.rows.map((r) => ({ ...r, values: r.values.filter((_, i) => i !== idx) }));
-    setDraft({ ...draft, seriesNames, rows });
+    const seriesAsLine = (draft.seriesAsLine ?? draft.seriesNames.map(() => false)).filter((_, i) => i !== idx);
+    setDraft({ ...draft, seriesNames, rows, seriesAsLine });
+  };
+
+  const toggleSeriesLine = (idx: number, value: boolean) => {
+    const seriesAsLine = draft.seriesNames.map((_, i) => (draft.seriesAsLine?.[i] ?? false));
+    seriesAsLine[idx] = value;
+    setDraft({ ...draft, seriesAsLine });
   };
 
   const setCategory = (rowIdx: number, category: string) => {
@@ -480,6 +580,16 @@ function ChartFields({ draft, setDraft }: { draft: ChartCard; setDraft: (c: AnyC
                         </button>
                       )}
                     </div>
+                    {draft.chartType === 'bar' && (
+                      <label className="flex items-center gap-1 mt-1.5 text-[10px] font-normal text-zinc-500 normal-case">
+                        <input
+                          type="checkbox"
+                          checked={draft.seriesAsLine?.[si] ?? false}
+                          onChange={(e) => toggleSeriesLine(si, e.target.checked)}
+                        />
+                        линией (совмещённая диаграмма)
+                      </label>
+                    )}
                   </th>
                 ))}
                 <th className="p-2 w-8" />

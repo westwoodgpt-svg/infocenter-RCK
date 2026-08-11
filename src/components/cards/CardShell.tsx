@@ -1,6 +1,7 @@
 import { ReactNode } from 'react';
 import { motion } from 'motion/react';
 import { Pencil, Trash2, ChevronUp, ChevronDown } from 'lucide-react';
+import { CardIndicator, IndicatorColor } from '../../types';
 
 interface CardShellProps {
   children: ReactNode;
@@ -12,7 +13,15 @@ interface CardShellProps {
   canMoveUp?: boolean;
   canMoveDown?: boolean;
   className?: string;
+  indicator?: CardIndicator;
 }
+
+const INDICATOR_DOT: Record<IndicatorColor, string> = {
+  emerald: 'bg-emerald-500 shadow-[0_0_8px_#10b981]',
+  amber: 'bg-amber-500 shadow-[0_0_8px_#f59e0b]',
+  rose: 'bg-rose-500 shadow-[0_0_8px_#f43f5e]',
+  sky: 'bg-sky-500 shadow-[0_0_8px_#0ea5e9]',
+};
 
 export default function CardShell({
   children,
@@ -24,6 +33,7 @@ export default function CardShell({
   canMoveUp = false,
   canMoveDown = false,
   className = '',
+  indicator,
 }: CardShellProps) {
   return (
     <motion.div
@@ -31,8 +41,14 @@ export default function CardShell({
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
-      className={`bg-[#111113] rounded-2xl border border-[#27272a] shadow-sm transition-all duration-300 hover:border-[#2d2d34] ${className}`}
+      className={`relative bg-[#111113] rounded-2xl border border-[#27272a] shadow-sm transition-all duration-300 hover:border-[#2d2d34] ${className}`}
     >
+      {indicator?.enabled && (
+        <span
+          title="Индикатор статуса"
+          className={`absolute top-3.5 left-3.5 z-20 w-2.5 h-2.5 rounded-full animate-pulse ${INDICATOR_DOT[indicator.color]}`}
+        />
+      )}
       {editMode && (
         // Полоса управления в потоке документа (не оверлей) — так карточкам
         // не нужно резервировать паддинг под кнопки, и на узких экранах
