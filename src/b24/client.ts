@@ -150,6 +150,89 @@ export async function setOption(name: string, value: string): Promise<void> {
   await callMethod('app.option.set', { options: { [name]: value } });
 }
 
+/* ── Сотрудники портала (для карточки «Ответственный») ───────
+   Отдельная реализация, а не через общий callMethod: user.get отдаёт
+   результат постранично (по 50), нужен доступ к result.more()/next(). */
+
+export interface PortalUser {
+  id: string;
+  name: string;
+  position: string;
+  photo: string;
+}
+
+const MAX_USER_PAGES = 20; // защита от бесконечного цикла на очень больших порталах
+const USERS_TIMEOUT_MS = 20000;
+
+interface RawBxUser {
+  ID: string;
+  NAME?: string;
+  LAST_NAME?: string;
+  SECOND_NAME?: string;
+  WORK_POSITION?: string;
+  PERSONAL_PHOTO?: string;
+}
+
+function formatUserName(u: RawBxUser): string {
+  return [u.LAST_NAME, u.NAME, u.SECOND_NAME].filter(Boolean).join(' ').trim() || `ID ${u.ID}`;
+}
+
+let portalUsersCache: PortalUser[] | null = null;
+let portalUsersInFlight: Promise<PortalUser[]> | null = null;
+
+export function getPortalUsers(): Promise<PortalUser[]> {
+  if (portalUsersCache) return Promise.resolve(portalUsersCache);
+  if (portalUsersInFlight) return portalUsersInFlight;
+  if (!isB24Available()) return Promise.resolve([]);
+
+  const BX24 = getBX24();
+  portalUsersInFlight = new Promise<PortalUser[]>((resolve, reject) => {
+    const collected: PortalUser[] = [];
+    let pages = 0;
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(`Bitrix24 не ответил на user.get за ${USERS_TIMEOUT_MS / 1000} с — проверьте право приложения на чтение пользователей`));
+    }, USERS_TIMEOUT_MS);
+
+    const handlePage = (result: any) => {
+      if (settled) return;
+      if (result.error()) {
+        settled = true;
+        clearTimeout(timer);
+        const err = result.error();
+        reject(new Error((err && (err.ex?.error_description || err.error_description)) || 'не удалось получить сотрудников портала'));
+        return;
+      }
+      const rows: RawBxUser[] = result.answer.result || [];
+      rows.forEach((u) => {
+        collected.push({
+          id: u.ID,
+          name: formatUserName(u),
+          position: u.WORK_POSITION || '',
+          photo: u.PERSONAL_PHOTO || '',
+        });
+      });
+      pages += 1;
+      if (result.more() && pages < MAX_USER_PAGES) {
+        result.next(handlePage);
+      } else {
+        settled = true;
+        clearTimeout(timer);
+        resolve(collected);
+      }
+    };
+
+    BX24.callMethod('user.get', { FILTER: { ACTIVE: true }, SELECT: ['ID', 'NAME', 'LAST_NAME', 'SECOND_NAME', 'WORK_POSITION', 'PERSONAL_PHOTO'] }, handlePage);
+  })
+    .then((users) => { portalUsersCache = users; return users; })
+    .finally(() => { portalUsersInFlight = null; });
+
+  return portalUsersInFlight;
+}
+
 /* ── Права ────────────────────────────────────────────────── */
 
 /** true — портал подтвердил, что пользователь администратор.

@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import {
-  ArrowUp, ArrowDown, Trash2, Plus, Eye, EyeOff, Pencil, X, Loader2, AlertTriangle, RefreshCw,
+  ArrowUp, ArrowDown, Trash2, Plus, Eye, EyeOff, Pencil, X, Loader2, AlertTriangle, RefreshCw, UserRound,
 } from 'lucide-react';
-import { ChartConfig, ChartFilter, ChartSeries, ChartType, TabConfig } from '../types';
-import { getLists, getListFields, B24ListInfo, B24Field } from '../b24/client';
+import { ChartConfig, ChartFilter, ChartSeries, ChartType, TabConfig, StatusIndicatorColor } from '../types';
+import { getLists, getListFields, getPortalUsers, B24ListInfo, B24Field, PortalUser } from '../b24/client';
 
 const CHART_TYPE_LABELS: Record<ChartType, string> = {
   bar: 'Столбцы',
@@ -12,6 +12,15 @@ const CHART_TYPE_LABELS: Record<ChartType, string> = {
   pie: 'Круговая диаграмма',
   kpi: 'KPI-карточка (число)',
   table: 'Таблица',
+  events: 'Список событий (несколько в одной карточке)',
+  person: 'Ответственный (карточка сотрудника)',
+};
+
+const INDICATOR_COLOR_LABELS: Record<StatusIndicatorColor, string> = {
+  emerald: 'Зелёный',
+  amber: 'Жёлтый',
+  rose: 'Красный',
+  sky: 'Синий',
 };
 
 interface ChartsEditorProps {
@@ -81,10 +90,10 @@ export default function ChartsEditor({ charts, tabs, onChange }: ChartsEditorPro
   return (
     <div className="space-y-3">
       <p className="text-xs text-[#a1a1aa]">
-        Пользовательские графики поверх Списков Б24. Встроенные графики пяти исходных вкладок
-        пока редактируются только в коде — здесь управляются графики, добавленные через
-        редактор. Источником может быть только уже существующий Список — если нужного ещё нет,
-        создайте его в разделе «Списки» Битрикс24, затем возвращайтесь сюда.
+        Пользовательские графики поверх Списков Б24 (или карточки сотрудников). Встроенные графики
+        пяти исходных вкладок пока редактируются только в коде — здесь управляются графики,
+        добавленные через редактор. Источником данных может быть только уже существующий Список —
+        если нужного ещё нет, создайте его в разделе «Списки» Битрикс24, затем возвращайтесь сюда.
       </p>
 
       {sorted.length === 0 && (
@@ -113,7 +122,8 @@ export default function ChartsEditor({ charts, tabs, onChange }: ChartsEditorPro
               <div className="flex-1 min-w-0">
                 <p className="text-sm text-white font-medium truncate">{chart.title}</p>
                 <p className="text-[11px] text-zinc-500 font-mono">
-                  {tabLabel(chart.tabId)} · {CHART_TYPE_LABELS[chart.type]} · Список {chart.dataSource.listId}
+                  {tabLabel(chart.tabId)} · {CHART_TYPE_LABELS[chart.type]}
+                  {chart.dataSource ? ` · Список ${chart.dataSource.listId}` : ''}
                 </p>
               </div>
 
@@ -164,17 +174,45 @@ function ChartForm({ chart, tabs, existingCount, onCancel, onSave }: ChartFormPr
   const [listsError, setListsError] = useState<string | null>(null);
   const [listsReloadKey, setListsReloadKey] = useState(0);
 
-  const [listId, setListId] = useState<number | null>(chart?.dataSource.listId ?? null);
+  const [listId, setListId] = useState<number | null>(chart?.dataSource?.listId ?? null);
   const [fields, setFields] = useState<B24Field[]>([]);
   const [fieldsLoading, setFieldsLoading] = useState(false);
   const [fieldsError, setFieldsError] = useState<string | null>(null);
   const [fieldsReloadKey, setFieldsReloadKey] = useState(0);
 
-  const [nameField, setNameField] = useState(chart?.dataSource.nameField ?? 'NAME');
-  const [series, setSeries] = useState<ChartSeries[]>(chart?.dataSource.series ?? []);
-  const [filters, setFilters] = useState<ChartFilter[]>(chart?.dataSource.filters ?? []);
+  const [nameField, setNameField] = useState(chart?.dataSource?.nameField ?? 'NAME');
+  const [series, setSeries] = useState<ChartSeries[]>(chart?.dataSource?.series ?? []);
+  const [filters, setFilters] = useState<ChartFilter[]>(chart?.dataSource?.filters ?? []);
+
+  // Карточка «Ответственный» — не связана со Списком, только с сотрудниками портала
+  const [personName, setPersonName] = useState(chart?.person?.name ?? '');
+  const [personUserId, setPersonUserId] = useState(chart?.person?.userId);
+  const [personRole, setPersonRole] = useState(chart?.person?.role ?? '');
+  const [personPhoto, setPersonPhoto] = useState(chart?.person?.photoUrl);
+  const [personTags, setPersonTags] = useState<string[]>(chart?.person?.tags ?? []);
+  const [personTagInput, setPersonTagInput] = useState('');
+  const [personNote, setPersonNote] = useState(chart?.person?.note ?? '');
+  const [portalUsers, setPortalUsers] = useState<PortalUser[]>([]);
+  const [portalUsersLoading, setPortalUsersLoading] = useState(false);
+  const [portalUsersError, setPortalUsersError] = useState<string | null>(null);
+
+  // Индикатор статуса («светофор»)
+  const [indicatorEnabled, setIndicatorEnabled] = useState(chart?.statusIndicator?.enabled ?? false);
+  const [indicatorMode, setIndicatorMode] = useState<'manual' | 'auto'>(chart?.statusIndicator?.mode ?? 'manual');
+  const [indicatorColor, setIndicatorColor] = useState<StatusIndicatorColor>(chart?.statusIndicator?.color ?? 'emerald');
 
   useEffect(() => {
+    if (type !== 'person' || portalUsers.length > 0 || portalUsersLoading) return;
+    setPortalUsersLoading(true);
+    setPortalUsersError(null);
+    getPortalUsers()
+      .then((r) => setPortalUsers(r))
+      .catch((e) => setPortalUsersError(e instanceof Error ? e.message : 'Не удалось получить сотрудников портала'))
+      .finally(() => setPortalUsersLoading(false));
+  }, [type, portalUsers.length, portalUsersLoading]);
+
+  useEffect(() => {
+    if (type === 'person') return;
     let cancelled = false;
     setListsLoading(true);
     setListsError(null);
@@ -183,10 +221,10 @@ function ChartForm({ chart, tabs, existingCount, onCancel, onSave }: ChartFormPr
       .catch((e) => { if (!cancelled) setListsError(e instanceof Error ? e.message : 'Не удалось получить Списки'); })
       .finally(() => { if (!cancelled) setListsLoading(false); });
     return () => { cancelled = true; };
-  }, [listsReloadKey]);
+  }, [type, listsReloadKey]);
 
   useEffect(() => {
-    if (!listId) { setFields([]); return; }
+    if (!listId || type === 'person') { setFields([]); return; }
     let cancelled = false;
     setFieldsLoading(true);
     setFieldsError(null);
@@ -195,7 +233,14 @@ function ChartForm({ chart, tabs, existingCount, onCancel, onSave }: ChartFormPr
       .catch((e) => { if (!cancelled) setFieldsError(e instanceof Error ? e.message : 'Не удалось получить поля Списка'); })
       .finally(() => { if (!cancelled) setFieldsLoading(false); });
     return () => { cancelled = true; };
-  }, [listId, fieldsReloadKey]);
+  }, [listId, type, fieldsReloadKey]);
+
+  // Для «Список событий» — держим ровно один ряд (поле даты события)
+  useEffect(() => {
+    if (type === 'events' && fields.length > 0 && series.length === 0) {
+      setSeries([{ key: `s0_${Date.now()}`, label: 'Дата события', field: fields[0].fieldId }]);
+    }
+  }, [type, fields, series.length]);
 
   const addSeries = () => {
     const key = `s${series.length}_${Date.now()}`;
@@ -213,11 +258,31 @@ function ChartForm({ chart, tabs, existingCount, onCancel, onSave }: ChartFormPr
   };
   const removeFilter = (idx: number) => setFilters(filters.filter((_, i) => i !== idx));
 
-  const canSave = title.trim() && tabId && listId && series.length > 0;
+  const addPersonTag = () => {
+    const v = personTagInput.trim();
+    if (!v) return;
+    setPersonTags([...personTags, v]);
+    setPersonTagInput('');
+  };
+
+  const onPersonNameChange = (value: string) => {
+    setPersonName(value);
+    const matched = portalUsers.find((u) => u.name.trim().toLowerCase() === value.trim().toLowerCase());
+    if (matched) {
+      setPersonUserId(matched.id);
+      setPersonRole(matched.position || personRole);
+      setPersonPhoto(matched.photo || undefined);
+    }
+  };
+
+  const canSave = type === 'person'
+    ? title.trim().length > 0 && personName.trim().length > 0
+    : title.trim().length > 0 && !!tabId && !!listId && series.length > 0;
 
   const handleSave = () => {
-    if (!canSave || !listId) return;
-    const config: ChartConfig = {
+    if (!canSave) return;
+    const statusIndicator = indicatorEnabled ? { enabled: true, mode: indicatorMode, color: indicatorColor } : undefined;
+    const base = {
       id: chart?.id ?? `chart-${Date.now()}`,
       tabId,
       order: chart?.order ?? existingCount,
@@ -226,6 +291,28 @@ function ChartForm({ chart, tabs, existingCount, onCancel, onSave }: ChartFormPr
       subtitle: subtitle.trim() || undefined,
       type,
       goal: goal.trim() ? Number(goal) : undefined,
+      statusIndicator,
+    };
+
+    if (type === 'person') {
+      onSave({
+        ...base,
+        dataSource: undefined,
+        person: {
+          userId: personUserId,
+          name: personName.trim(),
+          role: personRole.trim(),
+          photoUrl: personPhoto,
+          tags: personTags,
+          note: personNote.trim() || undefined,
+        },
+      });
+      return;
+    }
+
+    if (!listId) return;
+    onSave({
+      ...base,
       dataSource: {
         listId,
         listName: lists.find((l) => l.id === listId)?.name,
@@ -233,8 +320,7 @@ function ChartForm({ chart, tabs, existingCount, onCancel, onSave }: ChartFormPr
         series,
         filters: filters.length ? filters : undefined,
       },
-    };
-    onSave(config);
+    });
   };
 
   return (
@@ -248,7 +334,7 @@ function ChartForm({ chart, tabs, existingCount, onCancel, onSave }: ChartFormPr
 
       <div className="grid grid-cols-2 gap-3">
         <label className="text-xs text-zinc-400 space-y-1">
-          Название
+          {type === 'person' ? 'Заголовок карточки' : 'Название'}
           <input value={title} onChange={(e) => setTitle(e.target.value)}
             className="w-full bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none focus:border-indigo-500/40" />
         </label>
@@ -271,115 +357,233 @@ function ChartForm({ chart, tabs, existingCount, onCancel, onSave }: ChartFormPr
             {(Object.keys(CHART_TYPE_LABELS) as ChartType[]).map((t) => <option key={t} value={t}>{CHART_TYPE_LABELS[t]}</option>)}
           </select>
         </label>
-        {(type === 'bar' || type === 'line' || type === 'area') && (
+        {(type === 'bar' || type === 'line' || type === 'area' || type === 'kpi') && (
           <label className="text-xs text-zinc-400 space-y-1">
-            Целевая линия (необязательно)
+            Целевая линия / значение (необязательно)
             <input value={goal} onChange={(e) => setGoal(e.target.value)} inputMode="numeric"
               className="w-full bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none focus:border-indigo-500/40" />
           </label>
         )}
       </div>
 
-      <div className="border-t border-[#1f1f23] pt-3 space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold text-zinc-300">Источник данных — Список Б24</span>
-          <button type="button" onClick={() => setListsReloadKey((k) => k + 1)} disabled={listsLoading}
-            className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 disabled:opacity-40" title="Обновить список Списков">
-            <RefreshCw className={`w-3.5 h-3.5 ${listsLoading ? 'animate-spin' : ''}`} />
-          </button>
-        </div>
-
-        {listsError && (
-          <div className="flex items-start gap-2 text-xs text-amber-300/90 bg-amber-500/5 border border-amber-500/20 rounded-xl p-3">
-            <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-400" />
-            <span>{listsError}</span>
+      {type === 'person' ? (
+        <div className="border-t border-[#1f1f23] pt-3 space-y-3">
+          <span className="text-xs font-semibold text-zinc-300">Сотрудник</span>
+          {portalUsersError && (
+            <div className="flex items-start gap-2 text-xs text-amber-300/90 bg-amber-500/5 border border-amber-500/20 rounded-xl p-3">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-400" />
+              <span>{portalUsersError}. Можно ввести ФИО, должность и заметку вручную.</span>
+            </div>
+          )}
+          <label className="text-xs text-zinc-400 space-y-1 block">
+            ФИО {portalUsersLoading && <Loader2 className="inline w-3 h-3 animate-spin ml-1" />}
+            <input
+              value={personName}
+              onChange={(e) => onPersonNameChange(e.target.value)}
+              list={portalUsers.length > 0 ? 'iic-employee-options' : undefined}
+              placeholder="Иванов Иван Иванович"
+              className="w-full bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none focus:border-indigo-500/40"
+            />
+            {portalUsers.length > 0 && (
+              <datalist id="iic-employee-options">
+                {portalUsers.map((u) => <option key={u.id} value={u.name} />)}
+              </datalist>
+            )}
+          </label>
+          {portalUsers.length > 0 && (
+            <p className="text-[11px] text-zinc-500">
+              Начните вводить ФИО — предложим сотрудников портала ({portalUsers.length}), должность и фото подставятся автоматически.
+            </p>
+          )}
+          <div className="flex items-center gap-3">
+            {personPhoto ? (
+              <img src={personPhoto} alt={personName} className="w-9 h-9 rounded-lg object-cover border border-[#27272a]" />
+            ) : (
+              <span className="p-2 bg-indigo-500/10 text-indigo-400 rounded-lg border border-indigo-500/20"><UserRound className="w-4 h-4" /></span>
+            )}
+            <label className="flex-1 text-xs text-zinc-400 space-y-1">
+              Роль / должность
+              <input value={personRole} onChange={(e) => setPersonRole(e.target.value)}
+                className="w-full bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none focus:border-indigo-500/40" />
+            </label>
           </div>
-        )}
+          <div>
+            <span className="text-xs text-zinc-400 block mb-1">Направления (теги)</span>
+            <div className="flex flex-wrap gap-2 mb-2">
+              {personTags.map((t, i) => (
+                <span key={i} className="flex items-center gap-1.5 text-xs text-zinc-300 bg-[#0d0d0f] px-2.5 py-1 rounded-lg border border-[#27272a]">
+                  {t}
+                  <button type="button" onClick={() => setPersonTags(personTags.filter((_, idx) => idx !== i))} className="text-zinc-500 hover:text-rose-400">
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <input value={personTagInput} onChange={(e) => setPersonTagInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addPersonTag(); } }}
+                placeholder="Добавить направление и Enter"
+                className="flex-1 bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none focus:border-indigo-500/40" />
+              <button type="button" onClick={addPersonTag} className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-sm text-zinc-200">
+                <Plus className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+          <label className="text-xs text-zinc-400 space-y-1 block">
+            Заметка (необязательно)
+            <input value={personNote} onChange={(e) => setPersonNote(e.target.value)} placeholder="Контакты, зона ответственности…"
+              className="w-full bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none focus:border-indigo-500/40" />
+          </label>
+        </div>
+      ) : (
+        <>
+          <div className="border-t border-[#1f1f23] pt-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-zinc-300">Источник данных — Список Б24</span>
+              <button type="button" onClick={() => setListsReloadKey((k) => k + 1)} disabled={listsLoading}
+                className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 disabled:opacity-40" title="Обновить список Списков">
+                <RefreshCw className={`w-3.5 h-3.5 ${listsLoading ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
 
-        <select value={listId ?? ''} onChange={(e) => setListId(e.target.value ? Number(e.target.value) : null)}
-          disabled={listsLoading}
-          className="w-full bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none focus:border-indigo-500/40 disabled:opacity-50">
-          <option value="">{listsLoading ? 'Загрузка списков…' : '— выбрать —'}</option>
-          {lists.map((l) => <option key={l.id} value={l.id}>{l.name} (ID {l.id})</option>)}
-        </select>
-
-        {listId && (
-          <>
-            {fieldsError && (
+            {listsError && (
               <div className="flex items-start gap-2 text-xs text-amber-300/90 bg-amber-500/5 border border-amber-500/20 rounded-xl p-3">
                 <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-400" />
-                <span>{fieldsError}</span>
-                <button type="button" onClick={() => setFieldsReloadKey((k) => k + 1)} className="ml-auto underline whitespace-nowrap">
-                  Повторить
-                </button>
+                <span>{listsError}</span>
               </div>
             )}
-            <label className="text-xs text-zinc-400 space-y-1 block">
-              Поле для подписи (ось X) {fieldsLoading && <Loader2 className="inline w-3 h-3 animate-spin ml-1" />}
-              <select value={nameField} onChange={(e) => setNameField(e.target.value)} disabled={fieldsLoading}
-                className="w-full bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none focus:border-indigo-500/40 disabled:opacity-50">
-                <option value="NAME">NAME (стандартное название элемента)</option>
+
+            <select value={listId ?? ''} onChange={(e) => { setListId(e.target.value ? Number(e.target.value) : null); setSeries([]); }}
+              disabled={listsLoading}
+              className="w-full bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none focus:border-indigo-500/40 disabled:opacity-50">
+              <option value="">{listsLoading ? 'Загрузка списков…' : '— выбрать —'}</option>
+              {lists.map((l) => <option key={l.id} value={l.id}>{l.name} (ID {l.id})</option>)}
+            </select>
+
+            {listId && type !== 'events' && (
+              <>
+                {fieldsError && (
+                  <div className="flex items-start gap-2 text-xs text-amber-300/90 bg-amber-500/5 border border-amber-500/20 rounded-xl p-3">
+                    <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-400" />
+                    <span>{fieldsError}</span>
+                    <button type="button" onClick={() => setFieldsReloadKey((k) => k + 1)} className="ml-auto underline whitespace-nowrap">
+                      Повторить
+                    </button>
+                  </div>
+                )}
+                <label className="text-xs text-zinc-400 space-y-1 block">
+                  Поле для подписи (ось X) {fieldsLoading && <Loader2 className="inline w-3 h-3 animate-spin ml-1" />}
+                  <select value={nameField} onChange={(e) => setNameField(e.target.value)} disabled={fieldsLoading}
+                    className="w-full bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none focus:border-indigo-500/40 disabled:opacity-50">
+                    <option value="NAME">NAME (стандартное название элемента)</option>
+                    {fields.map((f) => <option key={f.fieldId} value={f.fieldId}>{f.label} ({f.fieldId})</option>)}
+                  </select>
+                </label>
+              </>
+            )}
+          </div>
+
+          {listId && type === 'events' && (
+            <div className="border-t border-[#1f1f23] pt-3 space-y-2">
+              <span className="text-xs font-semibold text-zinc-300">Поле с датой события {fieldsLoading && <Loader2 className="inline w-3 h-3 animate-spin ml-1" />}</span>
+              <select value={series[0]?.field ?? ''} onChange={(e) => setSeries([{ key: series[0]?.key ?? `s0_${Date.now()}`, label: 'Дата события', field: e.target.value }])}
+                className="w-full bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none focus:border-indigo-500/40">
                 {fields.map((f) => <option key={f.fieldId} value={f.fieldId}>{f.label} ({f.fieldId})</option>)}
               </select>
+              <p className="text-[11px] text-zinc-500">Название события берётся из поля подписи (NAME по умолчанию), карточка покажет сразу все элементы Списка со статусом «Завершено / Ближайшее / Планируется».</p>
+            </div>
+          )}
+
+          {listId && type !== 'events' && (
+            <div className="border-t border-[#1f1f23] pt-3 space-y-2">
+              <span className="text-xs font-semibold text-zinc-300">Ряды данных</span>
+              {series.map((s) => (
+                <div key={s.key} className="flex items-center gap-2 flex-wrap">
+                  <select value={s.field} onChange={(e) => updateSeries(s.key, { field: e.target.value })}
+                    className="flex-1 min-w-[140px] bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none">
+                    {fields.map((f) => <option key={f.fieldId} value={f.fieldId}>{f.label} ({f.fieldId})</option>)}
+                  </select>
+                  <input value={s.label} onChange={(e) => updateSeries(s.key, { label: e.target.value })} placeholder="Подпись ряда"
+                    className="flex-1 min-w-[100px] bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none" />
+                  <input type="color" value={s.color || '#6366f1'} onChange={(e) => updateSeries(s.key, { color: e.target.value })}
+                    className="w-9 h-8 bg-[#0d0d0f] border border-[#27272a] rounded-lg" />
+                  {type === 'bar' && (
+                    <label className="flex items-center gap-1.5 text-[11px] text-zinc-400 whitespace-nowrap">
+                      <input type="checkbox" checked={!!s.asLine} onChange={(e) => updateSeries(s.key, { asLine: e.target.checked })} />
+                      линией (совмещённая диаграмма)
+                    </label>
+                  )}
+                  <button type="button" onClick={() => removeSeries(s.key)} className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-400">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+              <button type="button" onClick={addSeries} disabled={fields.length === 0}
+                className="text-xs text-indigo-300 hover:text-indigo-200 disabled:opacity-40">+ добавить ряд</button>
+              {fields.length === 0 && !fieldsLoading && (
+                <p className="text-[11px] text-zinc-600">В этом Списке не нашлось дополнительных полей.</p>
+              )}
+            </div>
+          )}
+
+          {listId && (
+            <div className="border-t border-[#1f1f23] pt-3 space-y-2">
+              <span className="text-xs font-semibold text-zinc-300">Фильтры (необязательно)</span>
+              {filters.map((f, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <select value={f.field} onChange={(e) => updateFilter(i, { field: e.target.value })}
+                    className="bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none">
+                    <option value="name">name (подпись)</option>
+                    {series.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+                  </select>
+                  <select value={f.op} onChange={(e) => updateFilter(i, { op: e.target.value as ChartFilter['op'] })}
+                    className="bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none">
+                    <option value="eq">равно</option>
+                    <option value="neq">не равно</option>
+                    <option value="contains">содержит</option>
+                    <option value="gte">≥</option>
+                    <option value="lte">≤</option>
+                  </select>
+                  <input value={f.value} onChange={(e) => updateFilter(i, { value: e.target.value })}
+                    className="flex-1 bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none" />
+                  <button type="button" onClick={() => removeFilter(i)} className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-400">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+              <button type="button" onClick={addFilter} className="text-xs text-indigo-300 hover:text-indigo-200">+ добавить фильтр</button>
+            </div>
+          )}
+        </>
+      )}
+
+      <div className="border-t border-[#1f1f23] pt-3 space-y-2">
+        <label className="flex items-center gap-2 text-xs font-semibold text-zinc-300">
+          <input type="checkbox" checked={indicatorEnabled} onChange={(e) => setIndicatorEnabled(e.target.checked)} />
+          Индикатор статуса («светофор») в заголовке карточки
+        </label>
+        {indicatorEnabled && (
+          <div className="flex items-center gap-3 flex-wrap pl-6">
+            <label className="flex items-center gap-1.5 text-xs text-zinc-400">
+              <input type="radio" name="indicator-mode" checked={indicatorMode === 'manual'} onChange={() => setIndicatorMode('manual')} />
+              Ручной цвет
             </label>
-          </>
+            <label className="flex items-center gap-1.5 text-xs text-zinc-400">
+              <input type="radio" name="indicator-mode" checked={indicatorMode === 'auto'} onChange={() => setIndicatorMode('auto')} />
+              Авто (по цели/goal)
+            </label>
+            {indicatorMode === 'manual' && (
+              <select value={indicatorColor} onChange={(e) => setIndicatorColor(e.target.value as StatusIndicatorColor)}
+                className="bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1 text-xs text-white outline-none">
+                {(Object.keys(INDICATOR_COLOR_LABELS) as StatusIndicatorColor[]).map((c) => <option key={c} value={c}>{INDICATOR_COLOR_LABELS[c]}</option>)}
+              </select>
+            )}
+            {indicatorMode === 'auto' && (
+              <span className="text-[11px] text-zinc-500">Зелёный ≥ цели, жёлтый ≥ 80% цели, иначе красный. Требует заданную «Целевую линию».</span>
+            )}
+          </div>
         )}
       </div>
-
-      {listId && (
-        <div className="border-t border-[#1f1f23] pt-3 space-y-2">
-          <span className="text-xs font-semibold text-zinc-300">Ряды данных</span>
-          {series.map((s) => (
-            <div key={s.key} className="flex items-center gap-2">
-              <select value={s.field} onChange={(e) => updateSeries(s.key, { field: e.target.value })}
-                className="flex-1 bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none">
-                {fields.map((f) => <option key={f.fieldId} value={f.fieldId}>{f.label} ({f.fieldId})</option>)}
-              </select>
-              <input value={s.label} onChange={(e) => updateSeries(s.key, { label: e.target.value })} placeholder="Подпись ряда"
-                className="flex-1 bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none" />
-              <input type="color" value={s.color || '#6366f1'} onChange={(e) => updateSeries(s.key, { color: e.target.value })}
-                className="w-9 h-8 bg-[#0d0d0f] border border-[#27272a] rounded-lg" />
-              <button type="button" onClick={() => removeSeries(s.key)} className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-400">
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </div>
-          ))}
-          <button type="button" onClick={addSeries} disabled={fields.length === 0}
-            className="text-xs text-indigo-300 hover:text-indigo-200 disabled:opacity-40">+ добавить ряд</button>
-          {fields.length === 0 && !fieldsLoading && (
-            <p className="text-[11px] text-zinc-600">В этом Списке не нашлось дополнительных полей.</p>
-          )}
-        </div>
-      )}
-
-      {listId && (
-        <div className="border-t border-[#1f1f23] pt-3 space-y-2">
-          <span className="text-xs font-semibold text-zinc-300">Фильтры (необязательно)</span>
-          {filters.map((f, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <select value={f.field} onChange={(e) => updateFilter(i, { field: e.target.value })}
-                className="bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none">
-                <option value="name">name (подпись)</option>
-                {series.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-              </select>
-              <select value={f.op} onChange={(e) => updateFilter(i, { op: e.target.value as ChartFilter['op'] })}
-                className="bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none">
-                <option value="eq">равно</option>
-                <option value="neq">не равно</option>
-                <option value="contains">содержит</option>
-                <option value="gte">≥</option>
-                <option value="lte">≤</option>
-              </select>
-              <input value={f.value} onChange={(e) => updateFilter(i, { value: e.target.value })}
-                className="flex-1 bg-[#0d0d0f] border border-[#27272a] rounded-lg px-2 py-1.5 text-sm text-white outline-none" />
-              <button type="button" onClick={() => removeFilter(i)} className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-400">
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </div>
-          ))}
-          <button type="button" onClick={addFilter} className="text-xs text-indigo-300 hover:text-indigo-200">+ добавить фильтр</button>
-        </div>
-      )}
 
       <div className="flex items-center gap-2 pt-2">
         <button type="button" onClick={handleSave} disabled={!canSave}

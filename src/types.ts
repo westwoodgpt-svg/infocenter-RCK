@@ -90,7 +90,7 @@ export interface TabConfig {
   builtin: boolean;
 }
 
-export type ChartType = 'bar' | 'line' | 'area' | 'pie' | 'kpi' | 'table';
+export type ChartType = 'bar' | 'line' | 'area' | 'pie' | 'kpi' | 'table' | 'events' | 'person';
 
 export interface ChartFilter {
   field: string;
@@ -104,15 +104,39 @@ export interface ChartSeries {
   /** Логическое имя поля Списка ("NAME" либо "PROPERTY_123") */
   field: string;
   color?: string;
+  /** Для type "bar": рисовать этот ряд линией поверх столбцов (совмещённая диаграмма) */
+  asLine?: boolean;
 }
 
 export interface ChartDataSource {
   listId: number;
   listName?: string;
-  /** Поле, используемое как подпись категории/оси X (обычно NAME или дата) */
+  /** Поле, используемое как подпись категории/оси X (обычно NAME или дата).
+   *  Для type "events" — то же самое поле, что и подпись элемента. */
   nameField: string;
+  /** Для type "events" используется только series[0].field — как поле с датой события. */
   series: ChartSeries[];
   filters?: ChartFilter[];
+}
+
+/** Карточка «Ответственный» — вводится вручную через автодополнение по
+ *  сотрудникам портала (user.get), не привязана к Списку Б24. */
+export interface PersonCardData {
+  userId?: string;
+  name: string;
+  role: string;
+  photoUrl?: string;
+  tags: string[];
+  note?: string;
+}
+
+export type StatusIndicatorColor = 'emerald' | 'amber' | 'rose' | 'sky';
+
+export interface StatusIndicatorConfig {
+  enabled: boolean;
+  /** manual — цвет выбирается вручную; auto — зелёный/красный по сравнению первого ряда с целью (goal) */
+  mode: 'manual' | 'auto';
+  color: StatusIndicatorColor;
 }
 
 export interface ChartConfig {
@@ -124,7 +148,11 @@ export interface ChartConfig {
   subtitle?: string;
   type: ChartType;
   goal?: number;
-  dataSource: ChartDataSource;
+  /** Обязательно для всех типов, кроме "person" */
+  dataSource?: ChartDataSource;
+  /** Только для type "person" */
+  person?: PersonCardData;
+  statusIndicator?: StatusIndicatorConfig;
 }
 
 export interface DashboardConfig {
