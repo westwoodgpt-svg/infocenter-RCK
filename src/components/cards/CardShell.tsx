@@ -1,6 +1,6 @@
 import { ReactNode } from 'react';
 import { motion } from 'motion/react';
-import { Pencil, Trash2, ChevronUp, ChevronDown } from 'lucide-react';
+import { Pencil, Trash2, ChevronUp, ChevronDown, Copy } from 'lucide-react';
 import { CardIndicator, IndicatorColor } from '../../types';
 
 interface CardShellProps {
@@ -8,6 +8,7 @@ interface CardShellProps {
   editMode: boolean;
   onEdit: () => void;
   onDelete: () => void;
+  onDuplicate?: () => void;
   onMoveUp?: () => void;
   onMoveDown?: () => void;
   canMoveUp?: boolean;
@@ -28,6 +29,7 @@ export default function CardShell({
   editMode,
   onEdit,
   onDelete,
+  onDuplicate,
   onMoveUp,
   onMoveDown,
   canMoveUp = false,
@@ -84,6 +86,16 @@ export default function CardShell({
           >
             <Pencil className="w-3.5 h-3.5" />
           </button>
+          {onDuplicate && (
+            <button
+              type="button"
+              onClick={onDuplicate}
+              title="Дублировать карточку"
+              className="p-2 rounded-md text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+            >
+              <Copy className="w-3.5 h-3.5" />
+            </button>
+          )}
           <button
             type="button"
             onClick={onDelete}

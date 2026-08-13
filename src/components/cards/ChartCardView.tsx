@@ -20,6 +20,7 @@ import {
 import { BarChart3 } from 'lucide-react';
 import { ChartCard } from '../../types';
 import { colorFor, seriesColorFor } from './palette';
+import { planSeriesIndex } from './chartStatus';
 
 export default function ChartCardView({ card }: { card: ChartCard }) {
   const data = useMemo(
@@ -36,11 +37,13 @@ export default function ChartCardView({ card }: { card: ChartCard }) {
 
   const pieData = useMemo(() => {
     const seriesName = card.seriesNames[0] ?? 'Значение';
-    return card.rows.map((row) => ({ name: row.category, value: row.values[0] ?? 0, seriesName }));
+    return card.rows.map((row, i) => ({ name: row.category, value: row.values[0] ?? 0, seriesName, color: row.color || colorFor(i) }));
   }, [card]);
 
   const hasData = card.rows.length > 0 && card.seriesNames.length > 0;
   const isLineSeries = (i: number) => card.chartType === 'bar' && (card.seriesAsLine?.[i] ?? false);
+  const planIdx = card.chartType === 'bar' && card.highlightBelowPlan ? planSeriesIndex(card) : null;
+  const belowPlanColor = card.belowPlanColor || '#f43f5e';
 
   return (
     <div className="p-6">
@@ -74,10 +77,13 @@ export default function ChartCardView({ card }: { card: ChartCard }) {
                     return null;
                   }}
                 />
-                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, color: '#fafafa' }} />
+                {/* itemSorter={null} — по умолчанию Legend сортирует пункты по алфавиту (value),
+                    из-за чего порядок легенды расходится с порядком секторов; null сохраняет
+                    порядок отрисовки. */}
+                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, color: '#fafafa' }} itemSorter={null} />
                 <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={55} outerRadius={85} paddingAngle={3}>
-                  {pieData.map((_, i) => (
-                    <Cell key={i} fill={colorFor(i)} />
+                  {pieData.map((d, i) => (
+                    <Cell key={i} fill={d.color} />
                   ))}
                 </Pie>
               </PieChart>
@@ -87,7 +93,7 @@ export default function ChartCardView({ card }: { card: ChartCard }) {
                 <XAxis dataKey="name" tick={{ fill: '#a1a1aa', fontSize: 11 }} tickLine={false} axisLine={false} />
                 <YAxis tick={{ fill: '#a1a1aa', fontSize: 11 }} tickLine={false} axisLine={false} />
                 <Tooltip contentStyle={{ background: '#161619', border: '1px solid #27272a', borderRadius: 12, fontSize: 12 }} />
-                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, paddingTop: 10, color: '#fafafa' }} />
+                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, paddingTop: 10, color: '#fafafa' }} itemSorter={null} />
                 {card.seriesNames.map((name, i) => (
                   <Line key={name} type="monotone" dataKey={name} stroke={seriesColorFor(card.seriesColors, i)} strokeWidth={2.5} dot={{ r: 3 }} />
                 ))}
@@ -98,7 +104,7 @@ export default function ChartCardView({ card }: { card: ChartCard }) {
                 <XAxis dataKey="name" tick={{ fill: '#a1a1aa', fontSize: 11 }} tickLine={false} axisLine={false} />
                 <YAxis tick={{ fill: '#a1a1aa', fontSize: 11 }} tickLine={false} axisLine={false} />
                 <Tooltip contentStyle={{ background: '#161619', border: '1px solid #27272a', borderRadius: 12, fontSize: 12 }} />
-                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, paddingTop: 10, color: '#fafafa' }} />
+                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, paddingTop: 10, color: '#fafafa' }} itemSorter={null} />
                 {card.seriesNames.map((name, i) => (
                   <Area
                     key={name}
@@ -114,19 +120,16 @@ export default function ChartCardView({ card }: { card: ChartCard }) {
             ) : (
               <ComposedChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1f1f23" />
-                <XAxis xAxisId="bars" dataKey="name" tick={{ fill: '#a1a1aa', fontSize: 11 }} tickLine={false} axisLine={false} />
-                {/* Отдельная ось для линий той же ширины, но со scale="point" (без банд-паддинга у
-                    столбцов) — иначе линия останавливается в центре крайних столбцов, не доходя
-                    до краёв графика. */}
-                <XAxis xAxisId="line" dataKey="name" type="category" scale="point" padding={{ left: 0, right: 0 }} hide />
+                {/* Один общий ось X для столбцов и линии — так точки линии центрируются
+                    над столбцами внутри своей категории вместо растяжения до краёв графика. */}
+                <XAxis dataKey="name" tick={{ fill: '#a1a1aa', fontSize: 11 }} tickLine={false} axisLine={false} />
                 <YAxis tick={{ fill: '#a1a1aa', fontSize: 11 }} tickLine={false} axisLine={false} />
                 <Tooltip contentStyle={{ background: '#161619', border: '1px solid #27272a', borderRadius: 12, fontSize: 12 }} />
-                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, paddingTop: 10, color: '#fafafa' }} />
+                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, paddingTop: 10, color: '#fafafa' }} itemSorter={null} />
                 {card.seriesNames.map((name, i) =>
                   isLineSeries(i) ? (
                     <Line
                       key={name}
-                      xAxisId="line"
                       type="monotone"
                       dataKey={name}
                       stroke={seriesColorFor(card.seriesColors, i)}
@@ -136,12 +139,19 @@ export default function ChartCardView({ card }: { card: ChartCard }) {
                   ) : (
                     <Bar
                       key={name}
-                      xAxisId="bars"
                       dataKey={name}
                       fill={seriesColorFor(card.seriesColors, i)}
                       radius={[4, 4, 0, 0]}
                       barSize={Math.max(8, 32 / card.seriesNames.length)}
-                    />
+                    >
+                      {planIdx !== null &&
+                        card.rows.map((row, ri) => {
+                          const planValue = row.values[planIdx];
+                          const value = row.values[i];
+                          const below = planValue !== undefined && value !== undefined && value < planValue;
+                          return <Cell key={ri} fill={below ? belowPlanColor : seriesColorFor(card.seriesColors, i)} />;
+                        })}
+                    </Bar>
                   )
                 )}
               </ComposedChart>

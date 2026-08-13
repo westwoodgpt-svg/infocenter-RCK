@@ -5,6 +5,7 @@ import { AnyCard, TabId } from '../types';
 import CardShell from './cards/CardShell';
 import CardView from './cards/CardView';
 import CardEditorModal from './CardEditorModal';
+import { effectiveIndicator } from './cards/chartStatus';
 
 interface TabBoardProps {
   tab: TabId;
@@ -14,9 +15,10 @@ interface TabBoardProps {
   onUpdate: (tab: TabId, card: AnyCard) => void;
   onDelete: (tab: TabId, cardId: string) => void;
   onMove: (tab: TabId, cardId: string, direction: -1 | 1) => void;
+  onDuplicate: (tab: TabId, cardId: string) => void;
 }
 
-export default function TabBoard({ tab, cards, editMode, onAdd, onUpdate, onDelete, onMove }: TabBoardProps) {
+export default function TabBoard({ tab, cards, editMode, onAdd, onUpdate, onDelete, onMove, onDuplicate }: TabBoardProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<AnyCard | null>(null);
 
@@ -71,12 +73,13 @@ export default function TabBoard({ tab, cards, editMode, onAdd, onUpdate, onDele
               editMode={editMode}
               onEdit={() => openEdit(card)}
               onDelete={() => onDelete(tab, card.id)}
+              onDuplicate={() => onDuplicate(tab, card.id)}
               onMoveUp={() => onMove(tab, card.id, -1)}
               onMoveDown={() => onMove(tab, card.id, 1)}
               canMoveUp={idx > 0}
               canMoveDown={idx < cards.length - 1}
-              className={card.type === 'chart' || card.type === 'events' ? 'xl:col-span-2' : ''}
-              indicator={card.indicator}
+              className={card.type === 'chart' || card.type === 'events' || card.type === 'table' ? 'xl:col-span-2' : ''}
+              indicator={effectiveIndicator(card)}
             >
               <CardView card={card} />
             </CardShell>

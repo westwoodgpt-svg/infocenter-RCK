@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, ChangeEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Plus, Trash2 } from 'lucide-react';
+import { X, Plus, Trash2, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Upload, ImagePlus } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import {
   AnyCard,
   CardType,
@@ -17,6 +18,8 @@ import {
   PersonCard,
   EventCard,
   EventsCard,
+  TableCard,
+  ImageCard,
 } from '../types';
 import { newCardId } from '../store';
 import { usePortalUsers } from '../usePortalUsers';
@@ -30,7 +33,7 @@ interface CardEditorModalProps {
   onSave: (card: AnyCard) => void;
 }
 
-const CARD_TYPES: CardType[] = ['kpi', 'chart', 'money', 'list', 'person', 'event', 'events'];
+const CARD_TYPES: CardType[] = ['kpi', 'chart', 'money', 'list', 'person', 'event', 'events', 'table', 'image'];
 const CHART_TYPES: ChartType[] = ['bar', 'line', 'area', 'pie'];
 
 function blankCard(type: CardType): AnyCard {
@@ -57,6 +60,10 @@ function blankCard(type: CardType): AnyCard {
       return { ...base, type: 'event', date: '' } as EventCard;
     case 'events':
       return { ...base, type: 'events', items: [] } as EventsCard;
+    case 'table':
+      return { ...base, type: 'table', headers: ['Колонка 1', 'Колонка 2'], rows: [['', '']] } as TableCard;
+    case 'image':
+      return { ...base, type: 'image', imageUrl: '' } as ImageCard;
   }
 }
 
@@ -87,7 +94,10 @@ export default function CardEditorModal({ open, editingCard, onClose, onSave }: 
   };
 
   const canSave =
-    !!draft && draft.title.trim().length > 0 && (draft.type !== 'event' || draft.date.trim().length > 0);
+    !!draft &&
+    draft.title.trim().length > 0 &&
+    (draft.type !== 'event' || draft.date.trim().length > 0) &&
+    (draft.type !== 'image' || draft.imageUrl.trim().length > 0);
 
   const handleSave = () => {
     if (!draft || !canSave) return;
@@ -198,13 +208,23 @@ export default function CardEditorModal({ open, editingCard, onClose, onSave }: 
 
                   <div>
                     <label className={labelCls()}>
-                      {draft.type === 'event' ? 'Описание (необязательно)' : 'Подзаголовок (необязательно)'}
+                      {draft.type === 'event'
+                        ? 'Описание (необязательно)'
+                        : draft.type === 'image'
+                        ? 'Подпись (необязательно)'
+                        : 'Подзаголовок (необязательно)'}
                     </label>
                     <input
                       className={inputCls()}
                       value={draft.subtitle ?? ''}
                       onChange={(e) => setDraft({ ...draft, subtitle: e.target.value })}
-                      placeholder={draft.type === 'event' ? 'Что за событие, где и для кого…' : 'Реквизиты, период, ответственный…'}
+                      placeholder={
+                        draft.type === 'event'
+                          ? 'Что за событие, где и для кого…'
+                          : draft.type === 'image'
+                          ? 'Краткое описание изображения…'
+                          : 'Реквизиты, период, ответственный…'
+                      }
                     />
                   </div>
 
@@ -215,6 +235,8 @@ export default function CardEditorModal({ open, editingCard, onClose, onSave }: 
                   {draft.type === 'person' && <PersonFields draft={draft} setDraft={setDraft} />}
                   {draft.type === 'event' && <EventFields draft={draft} setDraft={setDraft} />}
                   {draft.type === 'events' && <EventsFields draft={draft} setDraft={setDraft} />}
+                  {draft.type === 'table' && <TableFields draft={draft} setDraft={setDraft} />}
+                  {draft.type === 'image' && <ImageFields draft={draft} setDraft={setDraft} />}
 
                   <IndicatorField draft={draft} setDraft={setDraft} />
                 </>
@@ -276,6 +298,7 @@ function KpiFields({ draft, setDraft }: { draft: KpiCard; setDraft: (c: AnyCard)
 }
 
 function EventFields({ draft, setDraft }: { draft: EventCard; setDraft: (c: AnyCard) => void }) {
+  const isElapsed = draft.counterMode === 'elapsed';
   return (
     <div>
       <label className={labelCls()}>Дата события</label>
@@ -286,8 +309,18 @@ function EventFields({ draft, setDraft }: { draft: EventCard; setDraft: (c: AnyC
         onChange={(e) => setDraft({ ...draft, date: e.target.value })}
       />
       <p className="text-[11px] text-[#71717a] mt-1">
-        Счётчик дней до/после события считается автоматически от текущей даты.
+        {isElapsed
+          ? 'Обратный счёт: карточка покажет, сколько дней прошло от этой даты (растёт каждый день).'
+          : 'Счётчик дней до/после события считается автоматически от текущей даты.'}
       </p>
+      <label className="flex items-center gap-2 mt-3 text-[11px] font-semibold text-[#71717a] uppercase tracking-wide">
+        <input
+          type="checkbox"
+          checked={isElapsed}
+          onChange={(e) => setDraft({ ...draft, counterMode: e.target.checked ? 'elapsed' : 'countdown' })}
+        />
+        Обратный счёт от даты (сколько дней прошло, напр. «дней без штрафа»)
+      </label>
     </div>
   );
 }
@@ -484,6 +517,13 @@ function PersonFields({ draft, setDraft }: { draft: PersonCard; setDraft: (c: An
   );
 }
 
+function arrayMove<T>(arr: T[], from: number, to: number): T[] {
+  const copy = [...arr];
+  const [item] = copy.splice(from, 1);
+  copy.splice(to, 0, item);
+  return copy;
+}
+
 function ChartFields({ draft, setDraft }: { draft: ChartCard; setDraft: (c: AnyCard) => void }) {
   const setSeriesName = (idx: number, name: string) => {
     const seriesNames = [...draft.seriesNames];
@@ -508,6 +548,16 @@ function ChartFields({ draft, setDraft }: { draft: ChartCard; setDraft: (c: AnyC
     setDraft({ ...draft, seriesNames, rows, seriesAsLine, seriesColors });
   };
 
+  const moveSeries = (idx: number, dir: -1 | 1) => {
+    const target = idx + dir;
+    if (target < 0 || target >= draft.seriesNames.length) return;
+    const seriesNames = arrayMove(draft.seriesNames, idx, target);
+    const seriesAsLine = arrayMove(draft.seriesAsLine ?? draft.seriesNames.map(() => false), idx, target);
+    const seriesColors = arrayMove(draft.seriesColors ?? draft.seriesNames.map((_, i) => colorFor(i)), idx, target);
+    const rows = draft.rows.map((r) => ({ ...r, values: arrayMove(r.values, idx, target) }));
+    setDraft({ ...draft, seriesNames, seriesAsLine, seriesColors, rows });
+  };
+
   const toggleSeriesLine = (idx: number, value: boolean) => {
     const seriesAsLine = draft.seriesNames.map((_, i) => (draft.seriesAsLine?.[i] ?? false));
     seriesAsLine[idx] = value;
@@ -522,6 +572,11 @@ function ChartFields({ draft, setDraft }: { draft: ChartCard; setDraft: (c: AnyC
 
   const setCategory = (rowIdx: number, category: string) => {
     const rows = draft.rows.map((r, i) => (i === rowIdx ? { ...r, category } : r));
+    setDraft({ ...draft, rows });
+  };
+
+  const setRowColor = (rowIdx: number, color: string) => {
+    const rows = draft.rows.map((r, i) => (i === rowIdx ? { ...r, color } : r));
     setDraft({ ...draft, rows });
   };
 
@@ -543,6 +598,14 @@ function ChartFields({ draft, setDraft }: { draft: ChartCard; setDraft: (c: AnyC
   const removeRow = (idx: number) => {
     setDraft({ ...draft, rows: draft.rows.filter((_, i) => i !== idx) });
   };
+
+  const moveRow = (idx: number, dir: -1 | 1) => {
+    const target = idx + dir;
+    if (target < 0 || target >= draft.rows.length) return;
+    setDraft({ ...draft, rows: arrayMove(draft.rows, idx, target) });
+  };
+
+  const hasPlanLine = (draft.seriesAsLine ?? []).some(Boolean);
 
   return (
     <div className="space-y-4">
@@ -576,8 +639,16 @@ function ChartFields({ draft, setDraft }: { draft: ChartCard; setDraft: (c: AnyC
               <tr className="border-b border-[#27272a] bg-[#161619]">
                 <th className="text-left p-2 font-semibold text-[#71717a]">Категория</th>
                 {draft.seriesNames.map((name, si) => (
-                  <th key={si} className="p-2 min-w-[120px]">
+                  <th key={si} className="p-2 min-w-[140px]">
                     <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => moveSeries(si, -1)}
+                        disabled={si === 0}
+                        title="Сдвинуть ряд влево"
+                        className="text-zinc-600 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed flex-shrink-0"
+                      >
+                        <ChevronLeft className="w-3 h-3" />
+                      </button>
                       {draft.chartType !== 'pie' && (
                         <input
                           type="color"
@@ -597,6 +668,14 @@ function ChartFields({ draft, setDraft }: { draft: ChartCard; setDraft: (c: AnyC
                           <X className="w-3 h-3" />
                         </button>
                       )}
+                      <button
+                        onClick={() => moveSeries(si, 1)}
+                        disabled={si === draft.seriesNames.length - 1}
+                        title="Сдвинуть ряд вправо"
+                        className="text-zinc-600 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed flex-shrink-0"
+                      >
+                        <ChevronRight className="w-3 h-3" />
+                      </button>
                     </div>
                     {draft.chartType === 'bar' && (
                       <label className="flex items-center gap-1 mt-1.5 text-[10px] font-normal text-zinc-500 normal-case">
@@ -617,11 +696,40 @@ function ChartFields({ draft, setDraft }: { draft: ChartCard; setDraft: (c: AnyC
               {draft.rows.map((row, ri) => (
                 <tr key={ri} className="border-b border-[#1f1f23] last:border-b-0">
                   <td className="p-2">
-                    <input
-                      className="w-full bg-transparent text-zinc-200 px-1 py-0.5 focus:outline-none"
-                      value={row.category}
-                      onChange={(e) => setCategory(ri, e.target.value)}
-                    />
+                    <div className="flex items-center gap-1">
+                      <div className="flex flex-col flex-shrink-0">
+                        <button
+                          onClick={() => moveRow(ri, -1)}
+                          disabled={ri === 0}
+                          title="Сдвинуть категорию выше"
+                          className="text-zinc-600 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed leading-none"
+                        >
+                          <ChevronUp className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={() => moveRow(ri, 1)}
+                          disabled={ri === draft.rows.length - 1}
+                          title="Сдвинуть категорию ниже"
+                          className="text-zinc-600 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed leading-none"
+                        >
+                          <ChevronDown className="w-3 h-3" />
+                        </button>
+                      </div>
+                      {draft.chartType === 'pie' && (
+                        <input
+                          type="color"
+                          title="Цвет сектора"
+                          className="w-5 h-5 rounded border border-[#27272a] bg-transparent p-0 flex-shrink-0 cursor-pointer"
+                          value={row.color ?? colorFor(ri)}
+                          onChange={(e) => setRowColor(ri, e.target.value)}
+                        />
+                      )}
+                      <input
+                        className="w-full bg-transparent text-zinc-200 px-1 py-0.5 focus:outline-none"
+                        value={row.category}
+                        onChange={(e) => setCategory(ri, e.target.value)}
+                      />
+                    </div>
                   </td>
                   {row.values.map((v, si) => (
                     <td key={si} className="p-2">
@@ -651,6 +759,230 @@ function ChartFields({ draft, setDraft }: { draft: ChartCard; setDraft: (c: AnyC
             <Plus className="w-3.5 h-3.5" /> Добавить ряд
           </button>
         </div>
+      </div>
+
+      {draft.chartType === 'bar' && hasPlanLine && (
+        <div className="border-t border-[#1f1f23] pt-4">
+          <label className="flex items-center gap-2 text-[11px] font-semibold text-[#71717a] uppercase tracking-wide">
+            <input
+              type="checkbox"
+              checked={draft.highlightBelowPlan ?? false}
+              onChange={(e) => setDraft({ ...draft, highlightBelowPlan: e.target.checked })}
+            />
+            Подсвечивать столбцы факта, если они ниже плана (линии)
+          </label>
+          {draft.highlightBelowPlan && (
+            <div className="flex items-center gap-2 mt-2">
+              <span className="text-xs text-zinc-400">Цвет подсветки:</span>
+              <input
+                type="color"
+                className="w-7 h-7 rounded border border-[#27272a] bg-transparent p-0 cursor-pointer"
+                value={draft.belowPlanColor || '#f43f5e'}
+                onChange={(e) => setDraft({ ...draft, belowPlanColor: e.target.value })}
+              />
+            </div>
+          )}
+          <p className="text-[11px] text-[#71717a] mt-2">
+            Если включено и хотя бы в одной категории факт ниже плана — индикатор статуса карточки (если включён ниже) автоматически станет красным.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyCard) => void }) {
+  const [importError, setImportError] = useState<string | null>(null);
+
+  const handleFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const isCsv = /\.csv$/i.test(file.name);
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        // .csv читаем как UTF-8 текст (type: 'string') — иначе SheetJS определяет
+        // кодировку по сырым байтам и кириллица без BOM превращается в кракозябры.
+        const wb = isCsv
+          ? XLSX.read(reader.result as string, { type: 'string' })
+          : XLSX.read(reader.result as ArrayBuffer, { type: 'array' });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const raw = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' });
+        const nonEmpty = raw.filter((r) => r.length > 0);
+        if (nonEmpty.length === 0) throw new Error('empty');
+        const [headerRow, ...bodyRows] = nonEmpty;
+        const headers = headerRow.map((h) => String(h ?? ''));
+        const rows = bodyRows.map((r) => headers.map((_, i) => String(r[i] ?? '')));
+        setDraft({ ...draft, headers, rows });
+        setImportError(null);
+      } catch {
+        setImportError('Не удалось прочитать файл. Поддерживаются .xlsx, .xls, .csv с заголовками в первой строке.');
+      }
+    };
+    if (isCsv) reader.readAsText(file, 'utf-8');
+    else reader.readAsArrayBuffer(file);
+    e.target.value = '';
+  };
+
+  const setHeader = (idx: number, value: string) => {
+    const headers = [...draft.headers];
+    headers[idx] = value;
+    setDraft({ ...draft, headers });
+  };
+
+  const addColumn = () => {
+    const headers = [...draft.headers, `Колонка ${draft.headers.length + 1}`];
+    const rows = draft.rows.map((r) => [...r, '']);
+    setDraft({ ...draft, headers, rows });
+  };
+
+  const removeColumn = (idx: number) => {
+    if (draft.headers.length <= 1) return;
+    const headers = draft.headers.filter((_, i) => i !== idx);
+    const rows = draft.rows.map((r) => r.filter((_, i) => i !== idx));
+    setDraft({ ...draft, headers, rows });
+  };
+
+  const setCell = (rowIdx: number, colIdx: number, value: string) => {
+    const rows = draft.rows.map((r, i) => {
+      if (i !== rowIdx) return r;
+      const next = [...r];
+      next[colIdx] = value;
+      return next;
+    });
+    setDraft({ ...draft, rows });
+  };
+
+  const addRow = () => {
+    setDraft({ ...draft, rows: [...draft.rows, draft.headers.map(() => '')] });
+  };
+
+  const removeRow = (idx: number) => {
+    setDraft({ ...draft, rows: draft.rows.filter((_, i) => i !== idx) });
+  };
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className={labelCls()}>Загрузить файл</label>
+        <label className="flex items-center gap-1.5 text-xs font-semibold text-indigo-400 hover:text-indigo-300 cursor-pointer px-3 py-2 bg-[#161619] border border-[#27272a] rounded-lg w-fit">
+          <Upload className="w-3.5 h-3.5" /> Выбрать .xlsx / .xls / .csv
+          <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFile} />
+        </label>
+        {importError && <p className="text-[11px] text-rose-400 mt-1.5">{importError}</p>}
+        <p className="text-[11px] text-[#71717a] mt-1.5">Первая строка файла считается заголовками столбцов. Данные также можно править вручную ниже.</p>
+      </div>
+
+      <div>
+        <label className={labelCls()}>Данные</label>
+        <div className="overflow-x-auto border border-[#27272a] rounded-xl">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-[#27272a] bg-[#161619]">
+                {draft.headers.map((h, ci) => (
+                  <th key={ci} className="p-2 min-w-[110px]">
+                    <div className="flex items-center gap-1">
+                      <input
+                        className="w-full bg-transparent border-b border-[#27272a] text-zinc-200 font-semibold px-1 py-0.5 focus:outline-none focus:border-indigo-500"
+                        value={h}
+                        onChange={(e) => setHeader(ci, e.target.value)}
+                      />
+                      {draft.headers.length > 1 && (
+                        <button onClick={() => removeColumn(ci)} className="text-zinc-600 hover:text-rose-400 flex-shrink-0">
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  </th>
+                ))}
+                <th className="p-2 w-8" />
+              </tr>
+            </thead>
+            <tbody>
+              {draft.rows.map((row, ri) => (
+                <tr key={ri} className="border-b border-[#1f1f23] last:border-b-0">
+                  {draft.headers.map((_, ci) => (
+                    <td key={ci} className="p-2">
+                      <input
+                        className="w-full bg-transparent text-zinc-200 px-1 py-0.5 focus:outline-none"
+                        value={row[ci] ?? ''}
+                        onChange={(e) => setCell(ri, ci, e.target.value)}
+                      />
+                    </td>
+                  ))}
+                  <td className="p-2">
+                    <button onClick={() => removeRow(ri)} className="text-zinc-600 hover:text-rose-400">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex gap-4 mt-2">
+          <button onClick={addRow} className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-semibold">
+            <Plus className="w-3.5 h-3.5" /> Добавить строку
+          </button>
+          <button onClick={addColumn} className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-semibold">
+            <Plus className="w-3.5 h-3.5" /> Добавить столбец
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ImageFields({ draft, setDraft }: { draft: ImageCard; setDraft: (c: AnyCard) => void }) {
+  const [error, setError] = useState<string | null>(null);
+  const isDataUrl = draft.imageUrl.startsWith('data:');
+
+  const handleFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setError('Выберите файл изображения (png, jpg, svg…)');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setDraft({ ...draft, imageUrl: String(reader.result) });
+      setError(null);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  return (
+    <div className="space-y-3">
+      <label className={labelCls()}>Изображение</label>
+      {draft.imageUrl && (
+        <img
+          src={draft.imageUrl}
+          alt=""
+          className="w-full max-h-56 object-contain rounded-lg border border-[#27272a] bg-[#161619]"
+        />
+      )}
+      <div className="flex items-center gap-3">
+        <label className="flex items-center gap-1.5 text-xs font-semibold text-indigo-400 hover:text-indigo-300 cursor-pointer px-3 py-2 bg-[#161619] border border-[#27272a] rounded-lg">
+          <ImagePlus className="w-3.5 h-3.5" /> Загрузить файл
+          <input type="file" accept="image/*" className="hidden" onChange={handleFile} />
+        </label>
+        {draft.imageUrl && (
+          <button onClick={() => setDraft({ ...draft, imageUrl: '' })} className="text-xs text-rose-400 hover:text-rose-300">
+            Удалить
+          </button>
+        )}
+      </div>
+      {error && <p className="text-[11px] text-rose-400">{error}</p>}
+      <div>
+        <label className={labelCls()}>…или ссылка на изображение</label>
+        <input
+          className={inputCls()}
+          value={isDataUrl ? '' : draft.imageUrl}
+          placeholder="https://…"
+          onChange={(e) => setDraft({ ...draft, imageUrl: e.target.value })}
+        />
       </div>
     </div>
   );
