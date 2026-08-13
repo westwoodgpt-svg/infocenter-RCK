@@ -42,6 +42,7 @@ export default function App() {
     addCard,
     updateCard,
     deleteCard,
+    duplicateCard,
     moveCard,
     resetToSeed,
     clearAll,
@@ -289,6 +290,7 @@ export default function App() {
               onAdd={addCard}
               onUpdate={updateCard}
               onDelete={deleteCard}
+              onDuplicate={duplicateCard}
               onMove={moveCard}
             />
           </motion.div>

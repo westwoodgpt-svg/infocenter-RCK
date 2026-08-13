@@ -149,6 +149,18 @@ export function useDashboardStore() {
     }));
   }, []);
 
+  const duplicateCard = useCallback((tab: TabId, cardId: string) => {
+    setState((prev) => {
+      const list = prev[tab];
+      const idx = list.findIndex((c) => c.id === cardId);
+      if (idx === -1) return prev;
+      const clone: AnyCard = { ...list[idx], id: newCardId(), title: `${list[idx].title} (копия)` };
+      const next = [...list];
+      next.splice(idx + 1, 0, clone);
+      return { ...prev, [tab]: next };
+    });
+  }, []);
+
   const moveCard = useCallback((tab: TabId, cardId: string, direction: -1 | 1) => {
     setState((prev) => {
       const list = [...prev[tab]];
@@ -175,6 +187,7 @@ export function useDashboardStore() {
     addCard,
     updateCard,
     deleteCard,
+    duplicateCard,
     moveCard,
     resetToSeed,
     clearAll,
