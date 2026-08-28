@@ -23,7 +23,7 @@ const MAX_DEPT_PAGES = 20;
 
 /** Инфоцентр РЦК, существовавший до разделения по отделам. */
 export const LEGACY_BOARD_ID = 'rck';
-const LEGACY_BOARD_TITLE = 'РЦК (общий)';
+const LEGACY_BOARD_TITLE = 'РЦК';
 
 const identityKey = (accessToken) => `rck:identity:${createHash('sha256').update(accessToken).digest('hex').slice(0, 32)}`;
 

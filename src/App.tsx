@@ -65,6 +65,7 @@ export default function App() {
     role,
     canSeeSummary,
     accessWarning,
+    legacyBoardId,
     switchBoard,
     loadSummary,
   } = useDashboardStore();
@@ -75,6 +76,10 @@ export default function App() {
   useEffect(() => {
     if (!canEdit && editMode) setEditMode(false);
   }, [canEdit, editMode]);
+
+  // Логотип РЦК — только на инфоцентре РЦК. У остальных отделов в шапке
+  // название их отдела без чужого бренда.
+  const isRckBoard = !summaryOpen && activeBoardId === legacyBoardId;
 
   const openBoardFromSummary = (boardId: string) => {
     setSummaryOpen(false);
@@ -167,8 +172,8 @@ export default function App() {
             </div>
             <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-white font-display flex flex-wrap items-center gap-x-3 gap-y-1.5">
               Инфоцентр
-              <img src={logoHeader} alt="РЦК" className="h-6 md:h-7 w-auto" />
-              {isShared && (activeBoard || summaryOpen) && (
+              {isRckBoard && <img src={logoHeader} alt="РЦК" className="h-6 md:h-7 w-auto" />}
+              {!isRckBoard && (activeBoard || summaryOpen) && (
                 <span className="text-lg md:text-xl font-bold text-[#a1a1aa]">
                   · {summaryOpen ? 'сводный экран' : activeBoard!.title}
                 </span>
