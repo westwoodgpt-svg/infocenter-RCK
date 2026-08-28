@@ -19,6 +19,10 @@ const LAST_OPEN_KEY = 'rck:bx-last-open';
 // «тёплого» экземпляра функции, чтобы не упираться в лимит подключений
 // бесплатного плана (30 соединений).
 let client;
+export function redisClient() {
+  return redis();
+}
+
 function redis() {
   const url = process.env.REDIS_URL;
   if (!url) {
@@ -205,15 +209,35 @@ export async function peekServiceToken() {
 // Не проверяет права — только то, что токен валиден прямо сейчас.
 // auth.domain приходит из клиентского BX24.getAuth() (отдельный от install-POST
 // API, там поле "domain" — штатное и документированное).
-export async function verifyUserToken({ accessToken, domain }) {
-  if (!accessToken || !domain) return false;
+export async function getUserProfile({ accessToken, domain }) {
+  if (!accessToken || !domain) return null;
   try {
     const res = await fetch(`https://${domain}/rest/profile?auth=${encodeURIComponent(accessToken)}`);
     const data = await res.json();
-    return Boolean(data.result);
+    if (!data.result) return null;
+    const r = data.result;
+    const name = [r.LAST_NAME, r.NAME].filter(Boolean).join(' ').trim();
+    return { id: String(r.ID || ''), name: name || `ID ${r.ID || '?'}`, isAdmin: Boolean(r.ADMIN) };
   } catch {
-    return false;
+    return null;
   }
+}
+
+export async function verifyUserToken({ accessToken, domain }) {
+  return Boolean(await getUserProfile({ accessToken, domain }));
+}
+
+// Чтение app.option сервисным токеном — нужно ровно один раз, при миграции
+// ранее сохранённого дашборда из app.option в Redis (см. api/_store.js).
+export async function bxAppOptionGet(key) {
+  const token = await getServiceToken();
+  const res = await fetch(`${token.restBase}app.option.get?auth=${encodeURIComponent(token.access_token)}`);
+  const data = await res.json();
+  if (data.error) {
+    throw new Error(data.error_description || data.error);
+  }
+  const options = data.result || {};
+  return options[key] ?? null;
 }
 
 export async function bxAppOptionSet(key, value) {

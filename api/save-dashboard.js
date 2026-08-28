@@ -1,9 +1,8 @@
-// Принимает изменения дашборда от ЛЮБОГО авторизованного сотрудника портала и
-// сохраняет их в app.option от имени сервисного (администраторского) токена —
-// см. api/_bitrixAuth.js о том, почему это нужно.
-import { verifyUserToken, bxAppOptionSet } from './_bitrixAuth.js';
-
-const OPTION_KEY = 'rck_dashboard_v1';
+// Совместимость со старыми вкладками, у которых ещё загружен предыдущий бандл:
+// они шлют состояние сюда. Пишем через то же хранилище, что и /api/dashboard,
+// чтобы данные из старой и новой версии не расходились.
+import { getUserProfile } from './_bitrixAuth.js';
+import { saveDashboard } from './_store.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -11,9 +10,6 @@ export default async function handler(req, res) {
     return;
   }
 
-  // req.body уже разобран платформой Vercel (Content-Type: application/json из
-  // fetch() в src/bitrix.ts) — читать req как сырой поток здесь не нужно и не
-  // работает: Vercel уже потребляет исходный stream до вызова этого обработчика.
   let payload = req.body;
   if (typeof payload === 'string') {
     try {
@@ -30,16 +26,18 @@ export default async function handler(req, res) {
     return;
   }
 
-  const isValidUser = await verifyUserToken({ accessToken: auth.access_token, domain: auth.domain });
-  if (!isValidUser) {
+  const profile = await getUserProfile({ accessToken: auth.access_token, domain: auth.domain });
+  if (!profile) {
     res.status(403).json({ ok: false, error: 'сессия Битрикс24 недействительна — обновите страницу' });
     return;
   }
 
   try {
-    await bxAppOptionSet(OPTION_KEY, JSON.stringify(state));
-    res.status(200).json({ ok: true });
+    // baseRev не приходит от старого клиента — сохраняем как есть, поверх
+    // текущей версии (правки при этом всё равно попадают в историю карточек).
+    const saved = await saveDashboard({ state, baseRev: null, author: profile.name });
+    res.status(200).json({ ok: true, rev: saved.rev });
   } catch (err) {
-    res.status(502).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    res.status(err && err.tooLarge ? 413 : 502).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
   }
 }

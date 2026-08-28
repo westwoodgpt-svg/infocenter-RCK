@@ -15,6 +15,8 @@ interface CardShellProps {
   canMoveDown?: boolean;
   className?: string;
   indicator?: CardIndicator;
+  /** Показана прошлая версия карточки (открыт таймлайн) — подсвечиваем рамкой. */
+  dimmed?: boolean;
 }
 
 const INDICATOR_DOT: Record<IndicatorColor, string> = {
@@ -36,6 +38,7 @@ export default function CardShell({
   canMoveDown = false,
   className = '',
   indicator,
+  dimmed = false,
 }: CardShellProps) {
   return (
     <motion.div
@@ -43,7 +46,9 @@ export default function CardShell({
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
-      className={`relative bg-[#111113] rounded-2xl border border-[#27272a] shadow-sm transition-all duration-300 hover:border-[#2d2d34] ${className}`}
+      className={`relative bg-[#111113] rounded-2xl border shadow-sm transition-all duration-300 ${
+        dimmed ? 'border-amber-500/40 shadow-[0_0_18px_rgba(245,158,11,0.10)]' : 'border-[#27272a] hover:border-[#2d2d34]'
+      } ${className}`}
     >
       {indicator?.enabled && (
         <span

@@ -2,10 +2,14 @@ import { useState } from 'react';
 import { motion } from 'motion/react';
 import { LayoutGrid, Plus } from 'lucide-react';
 import { AnyCard, TabId } from '../types';
+import { CardHistoryEntry } from '../bitrix';
 import CardShell from './cards/CardShell';
 import CardView from './cards/CardView';
+import CardHistoryBar, { CardVersion } from './cards/CardHistoryBar';
 import CardEditorModal from './CardEditorModal';
 import { effectiveIndicator } from './cards/chartStatus';
+
+type LoadHistory = (tab: TabId, cardId: string) => Promise<{ entries: CardHistoryEntry[]; error: string | null }>;
 
 interface TabBoardProps {
   tab: TabId;
@@ -16,9 +20,76 @@ interface TabBoardProps {
   onDelete: (tab: TabId, cardId: string) => void;
   onMove: (tab: TabId, cardId: string, direction: -1 | 1) => void;
   onDuplicate: (tab: TabId, cardId: string) => void;
+  loadHistory: LoadHistory;
 }
 
-export default function TabBoard({ tab, cards, editMode, onAdd, onUpdate, onDelete, onMove, onDuplicate }: TabBoardProps) {
+// Карточка с собственным таймлайном: ползунок листает сохранённые версии, и
+// пока выбрана прошлая — тело карточки показывает именно её.
+interface BoardCardProps {
+  tab: TabId;
+  card: AnyCard;
+  editMode: boolean;
+  index: number;
+  total: number;
+  loadHistory: LoadHistory;
+  onEdit: () => void;
+  onDelete: () => void;
+  onDuplicate: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onRestore: (card: AnyCard) => void;
+}
+
+function BoardCard({
+  tab,
+  card,
+  editMode,
+  index,
+  total,
+  loadHistory,
+  onEdit,
+  onDelete,
+  onDuplicate,
+  onMoveUp,
+  onMoveDown,
+  onRestore,
+}: BoardCardProps) {
+  const [version, setVersion] = useState<CardVersion | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
+  const shown = version ? version.card : card;
+
+  return (
+    <CardShell
+      editMode={editMode}
+      onEdit={onEdit}
+      onDelete={onDelete}
+      onDuplicate={onDuplicate}
+      onMoveUp={onMoveUp}
+      onMoveDown={onMoveDown}
+      canMoveUp={index > 0}
+      canMoveDown={index < total - 1}
+      className={card.type === 'chart' || card.type === 'events' || card.type === 'table' ? 'xl:col-span-2' : ''}
+      indicator={effectiveIndicator(shown)}
+      dimmed={version !== null}
+    >
+      <CardView card={shown} />
+      <CardHistoryBar
+        tab={tab}
+        card={card}
+        editMode={editMode}
+        loadHistory={loadHistory}
+        selected={selected}
+        onSelect={(v, idx) => {
+          setVersion(v);
+          setSelected(idx);
+        }}
+        onRestore={onRestore}
+      />
+    </CardShell>
+  );
+}
+
+export default function TabBoard({ tab, cards, editMode, onAdd, onUpdate, onDelete, onMove, onDuplicate, loadHistory }: TabBoardProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<AnyCard | null>(null);
 
@@ -68,21 +139,21 @@ export default function TabBoard({ tab, cards, editMode, onAdd, onUpdate, onDele
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
           {cards.map((card, idx) => (
-            <CardShell
+            <BoardCard
               key={card.id}
+              tab={tab}
+              card={card}
               editMode={editMode}
+              index={idx}
+              total={cards.length}
+              loadHistory={loadHistory}
               onEdit={() => openEdit(card)}
               onDelete={() => onDelete(tab, card.id)}
               onDuplicate={() => onDuplicate(tab, card.id)}
               onMoveUp={() => onMove(tab, card.id, -1)}
               onMoveDown={() => onMove(tab, card.id, 1)}
-              canMoveUp={idx > 0}
-              canMoveDown={idx < cards.length - 1}
-              className={card.type === 'chart' || card.type === 'events' || card.type === 'table' ? 'xl:col-span-2' : ''}
-              indicator={effectiveIndicator(card)}
-            >
-              <CardView card={card} />
-            </CardShell>
+              onRestore={(restored) => onUpdate(tab, restored)}
+            />
           ))}
         </div>
       )}

@@ -2,6 +2,7 @@
       "buildCommand": "npm run build",
       "outputDirectory": "dist",
       "routes": [
+              { "src": "/api/dashboard", "dest": "/api/dashboard" },
               { "src": "/api/save-dashboard", "dest": "/api/save-dashboard" },
               { "src": "/api/bitrix-status", "dest": "/api/bitrix-status" },
               { "src": "/(.*)", "dest": "/api/serve" }
