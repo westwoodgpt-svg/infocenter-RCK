@@ -129,6 +129,8 @@ export function useDashboardStore() {
   const [me, setMe] = useState<BootstrapInfo['me'] | null>(null);
   const [canSeeSummary, setCanSeeSummary] = useState(false);
   const [accessWarning, setAccessWarning] = useState<string | null>(null);
+  // Инфоцентр, за которым закреплён бренд РЦК: только у него в шапке логотип.
+  const [legacyBoardId, setLegacyBoardId] = useState<string>(LEGACY_BOARD_ID);
 
   // Синхронизация живёт на ref-ах: таймеры и обработчики должны видеть
   // актуальные значения, а не те, что были на момент их создания.
@@ -372,6 +374,7 @@ export function useDashboardStore() {
         modeRef.current = 'local';
         setSyncMode('local');
         setBoards([LOCAL_BOARD]);
+        setLegacyBoardId(LOCAL_BOARD_ID); // автономный режим — это тот же инфоцентр РЦК
         adoptLegacyCache(LOCAL_BOARD_ID);
         const cache = readCache(LOCAL_BOARD_ID) || emptyCache(SEED_DATA);
         boardRef.current = LOCAL_BOARD_ID;
@@ -407,6 +410,7 @@ export function useDashboardStore() {
         setBoards([{ id: LEGACY_BOARD_ID, title: 'Инфоцентр РЦК', canEdit: true }]);
         setAccessWarning(`Не удалось получить список инфоцентров по отделам: ${error || 'неизвестная ошибка'}`);
         legacyBoardRef.current = LEGACY_BOARD_ID;
+        setLegacyBoardId(LEGACY_BOARD_ID);
         adoptLegacyCache(LEGACY_BOARD_ID);
         await openBoard(LEGACY_BOARD_ID);
         return;
@@ -420,6 +424,7 @@ export function useDashboardStore() {
       setCanSeeSummary(info.canSeeSummary);
       setAccessWarning(info.warning);
       legacyBoardRef.current = info.legacyBoardId;
+      setLegacyBoardId(info.legacyBoardId);
       adoptLegacyCache(info.legacyBoardId);
 
       let preferred: string | null = null;
@@ -600,6 +605,7 @@ export function useDashboardStore() {
     me,
     canSeeSummary,
     accessWarning,
+    legacyBoardId,
     switchBoard,
     loadSummary,
     refresh,
