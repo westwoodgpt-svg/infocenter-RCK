@@ -1,4 +1,4 @@
-import { DashboardState } from './types';
+import { AnyCard, DashboardState, TabId } from './types';
 
 // Общее хранилище дашборда на уровне приложения Битрикс24 (app.option) —
 // один и тот же ключ виден всем пользователям портала, установившим
@@ -13,9 +13,16 @@ declare global {
     BX24?: {
       init: (cb: () => void) => void;
       callMethod: (method: string, params: Record<string, unknown>, cb: (result: BXResult) => void) => void;
-      getAuth: () => { access_token: string; domain: string; member_id?: string } | false;
+      getAuth: () => BXAuth | false;
+      refreshAuth?: (cb: (auth: BXAuth | false) => void) => void;
     };
   }
+}
+
+export interface BXAuth {
+  access_token: string;
+  domain: string;
+  member_id?: string;
 }
 
 interface BXResult {
@@ -99,38 +106,163 @@ export function fetchDashboardOption(): Promise<{ state: DashboardState | null; 
   });
 }
 
-// Сохранение идёт не напрямую в Битрикс24 из браузера (app.option.set доступен
-// только администраторам портала), а через наш серверный эндпоинт: он
-// проверяет, что у вызывающего есть действующая сессия портала, и пишет в
-// app.option от имени отдельного сервисного (администраторского) токена —
-// так редактировать может любой сотрудник. См. api/_bitrixAuth.js.
-export async function saveDashboardOption(state: DashboardState): Promise<{ ok: boolean; error: string | null }> {
-  if (!hasBX24()) {
-    return { ok: false, error: 'нет соединения с Битрикс24' };
-  }
+// Чтение/запись данных инфоцентра идут через наш эндпоинт /api/dashboard.
+//
+// Раньше состояние писалось в app.option Битрикс24 (значение опции портала
+// ограничено по объёму) — из-за этого сохранение молча падало, а правка
+// сотрудника исчезала при следующем чтении. Теперь состояние лежит в Redis на
+// стороне сервера, app.option остаётся только резервной копией.
 
-  const auth = window.BX24!.getAuth();
-  if (!auth) {
-    return { ok: false, error: 'не удалось получить авторизацию Битрикс24' };
-  }
+export interface RemoteDashboard {
+  state: DashboardState | null;
+  rev: number;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
 
-  try {
-    const res = await fetch('/api/save-dashboard', {
+export interface CardHistoryEntry {
+  rev?: number;
+  at: string;
+  by: string | null;
+  action: 'create' | 'update' | 'delete';
+  card: AnyCard;
+  /** Версия сохранена без тяжёлого изображения (экономия места в истории). */
+  trimmed?: boolean;
+}
+
+function currentAuth(): Promise<BXAuth | null> {
+  return new Promise((resolve) => {
+    if (!hasBX24()) {
+      resolve(null);
+      return;
+    }
+    const auth = window.BX24!.getAuth();
+    resolve(auth || null);
+  });
+}
+
+// Токен, выданный порталом вкладке, живёт около часа. Если инфоцентр держат
+// открытым дольше, сервер отвечает 403 — тогда просим SDK обновить токен и
+// повторяем запрос один раз, чтобы сохранение не «отваливалось» само по себе.
+function refreshAuth(): Promise<BXAuth | null> {
+  return new Promise((resolve) => {
+    const bx = window.BX24;
+    if (!bx || typeof bx.refreshAuth !== 'function') {
+      resolve(null);
+      return;
+    }
+    let done = false;
+    const finish = (auth: BXAuth | null) => {
+      if (done) return;
+      done = true;
+      resolve(auth);
+    };
+    try {
+      bx.refreshAuth((auth) => finish(auth || null));
+    } catch {
+      finish(null);
+    }
+    setTimeout(() => finish(null), 5000);
+  });
+}
+
+interface ApiResponse {
+  ok: boolean;
+  error?: string;
+}
+
+async function postDashboardApi<T extends ApiResponse>(
+  body: Record<string, unknown>
+): Promise<{ data: T | null; error: string | null }> {
+  if (!hasBX24()) return { data: null, error: 'нет соединения с Битрикс24' };
+
+  let auth = await currentAuth();
+  if (!auth) return { data: null, error: 'не удалось получить авторизацию Битрикс24' };
+
+  const send = async (a: BXAuth) => {
+    const res = await fetch('/api/dashboard', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        state,
-        auth: { access_token: auth.access_token, domain: auth.domain },
-      }),
+      body: JSON.stringify({ ...body, auth: { access_token: a.access_token, domain: a.domain } }),
     });
-    const data = (await res.json()) as { ok: boolean; error?: string };
-    if (!res.ok || !data.ok) {
-      return { ok: false, error: data.error || `HTTP ${res.status}` };
+    let data: T | null = null;
+    try {
+      data = (await res.json()) as T;
+    } catch {
+      data = null;
     }
-    return { ok: true, error: null };
+    return { res, data };
+  };
+
+  try {
+    let { res, data } = await send(auth);
+    if (res.status === 403) {
+      const refreshed = await refreshAuth();
+      if (refreshed) {
+        auth = refreshed;
+        ({ res, data } = await send(refreshed));
+      }
+    }
+    if (!res.ok || !data || !data.ok) {
+      return { data: null, error: (data && data.error) || `HTTP ${res.status}` };
+    }
+    return { data, error: null };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : 'сетевая ошибка' };
+    return { data: null, error: e instanceof Error ? e.message : 'сетевая ошибка' };
   }
+}
+
+export async function loadDashboardRemote(): Promise<{ data: RemoteDashboard | null; error: string | null }> {
+  const { data, error } = await postDashboardApi<ApiResponse & RemoteDashboard>({ action: 'load' });
+  if (error) {
+    // Запасной путь: читаем прежнее место хранения напрямую из браузера —
+    // так данные видно, даже если наш сервер или Redis временно недоступны.
+    const legacy = await fetchDashboardOption();
+    if (legacy.state) {
+      return { data: { state: legacy.state, rev: 0, updatedAt: null, updatedBy: null }, error: null };
+    }
+    return { data: null, error };
+  }
+  if (!data!.state) {
+    // В общем хранилище пусто. Возможно, данные ещё лежат в app.option и не
+    // перенеслись (например, сервисный токен портала протух) — читаем их прямо
+    // из браузера, чтобы сотрудник в любом случае увидел внесённое раньше.
+    const legacy = await fetchDashboardOption();
+    if (legacy.state) {
+      return { data: { state: legacy.state, rev: 0, updatedAt: null, updatedBy: null }, error: null };
+    }
+  }
+
+  return {
+    data: { state: data!.state, rev: data!.rev, updatedAt: data!.updatedAt, updatedBy: data!.updatedBy },
+    error: null,
+  };
+}
+
+export async function saveDashboardRemote(
+  state: DashboardState,
+  baseRev: number
+): Promise<{ ok: boolean; rev: number | null; state: DashboardState | null; error: string | null }> {
+  const { data, error } = await postDashboardApi<ApiResponse & { rev: number; state: DashboardState }>({
+    action: 'save',
+    state,
+    baseRev,
+  });
+  if (error) return { ok: false, rev: null, state: null, error };
+  return { ok: true, rev: data!.rev, state: data!.state, error: null };
+}
+
+export async function fetchCardHistoryRemote(
+  tab: TabId,
+  cardId: string
+): Promise<{ entries: CardHistoryEntry[]; error: string | null }> {
+  const { data, error } = await postDashboardApi<ApiResponse & { entries: CardHistoryEntry[] }>({
+    action: 'history',
+    tab,
+    cardId,
+  });
+  if (error) return { entries: [], error };
+  return { entries: data!.entries || [], error: null };
 }
 
 interface RawBxUser {

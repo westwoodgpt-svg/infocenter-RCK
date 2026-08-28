@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Plus, Trash2, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Upload, ImagePlus } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { dataUrlSizeLabel, fileToDataUrl } from '../imageFile';
 import {
   AnyCard,
   CardType,
@@ -937,20 +938,28 @@ function ImageFields({ draft, setDraft }: { draft: ImageCard; setDraft: (c: AnyC
   const [error, setError] = useState<string | null>(null);
   const isDataUrl = draft.imageUrl.startsWith('data:');
 
-  const handleFile = (e: ChangeEvent<HTMLInputElement>) => {
+  const [busy, setBusy] = useState(false);
+
+  const handleFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
     if (!file.type.startsWith('image/')) {
       setError('Выберите файл изображения (png, jpg, svg…)');
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      setDraft({ ...draft, imageUrl: String(reader.result) });
+    setBusy(true);
+    try {
+      // Большие снимки ужимаем — иначе одна карточка распухает на мегабайты
+      // и тормозит сохранение всего инфоцентра.
+      const dataUrl = await fileToDataUrl(file);
+      setDraft({ ...draft, imageUrl: dataUrl });
       setError(null);
-    };
-    reader.readAsDataURL(file);
-    e.target.value = '';
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'не удалось загрузить изображение');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -965,9 +974,10 @@ function ImageFields({ draft, setDraft }: { draft: ImageCard; setDraft: (c: AnyC
       )}
       <div className="flex items-center gap-3">
         <label className="flex items-center gap-1.5 text-xs font-semibold text-indigo-400 hover:text-indigo-300 cursor-pointer px-3 py-2 bg-[#161619] border border-[#27272a] rounded-lg">
-          <ImagePlus className="w-3.5 h-3.5" /> Загрузить файл
-          <input type="file" accept="image/*" className="hidden" onChange={handleFile} />
+          <ImagePlus className="w-3.5 h-3.5" /> {busy ? 'Обрабатываем…' : 'Загрузить файл'}
+          <input type="file" accept="image/*" className="hidden" onChange={handleFile} disabled={busy} />
         </label>
+        {isDataUrl && <span className="text-[11px] text-[#71717a]">{dataUrlSizeLabel(draft.imageUrl)}</span>}
         {draft.imageUrl && (
           <button onClick={() => setDraft({ ...draft, imageUrl: '' })} className="text-xs text-rose-400 hover:text-rose-300">
             Удалить

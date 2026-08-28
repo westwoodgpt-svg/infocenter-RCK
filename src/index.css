@@ -79,3 +79,46 @@ html, body, #root {
   display: none;
 }
 
+
+/* Ползунок истории версий карточки */
+.history-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+}
+.history-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #3f3f46 0%, #6366f1 100%);
+}
+.history-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #3f3f46 0%, #6366f1 100%);
+}
+.history-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 999px;
+  background: #fafafa;
+  border: 2px solid #6366f1;
+  box-shadow: 0 0 8px rgba(99, 102, 241, 0.5);
+}
+.history-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: #fafafa;
+  border: 2px solid #6366f1;
+  box-shadow: 0 0 8px rgba(99, 102, 241, 0.5);
+}
+.history-slider:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid #a5b4fc;
+  outline-offset: 2px;
+}

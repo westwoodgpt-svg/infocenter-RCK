@@ -20,6 +20,8 @@ import {
   Wifi,
   WifiOff,
   AlertTriangle,
+  UploadCloud,
+  History,
 } from 'lucide-react';
 
 import { TabId, DashboardState, AnyCard } from './types';
@@ -47,6 +49,10 @@ export default function App() {
     resetToSeed,
     clearAll,
     replaceAll,
+    loadCardHistory,
+    unsyncedLocal,
+    keepLocalCopy,
+    discardLocalCopy,
   } = useDashboardStore();
   const isShared = syncMode === 'bitrix';
 
@@ -262,6 +268,49 @@ export default function App() {
           </div>
         </motion.nav>
 
+        {unsyncedLocal && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="elegant-card rounded-2xl p-4 border border-amber-500/30 bg-amber-500/5 flex flex-col md:flex-row md:items-center gap-3"
+          >
+            <UploadCloud className="w-5 h-5 text-amber-400 flex-shrink-0" />
+            <div className="text-xs text-amber-100/90 leading-relaxed flex-1">
+              <p className="font-semibold text-amber-200">
+                В этом браузере остались изменения, которые не сохранились на портале.
+              </p>
+              <p className="mt-1 text-amber-100/70">
+                Сейчас показана именно эта, локальная версия. Отправьте её на портал, чтобы её увидели коллеги,
+                или откройте версию портала
+                {unsyncedLocal.remoteUpdatedAt
+                  ? ` (последнее сохранение — ${new Date(unsyncedLocal.remoteUpdatedAt).toLocaleString('ru-RU', {
+                      day: '2-digit',
+                      month: '2-digit',
+                      year: '2-digit',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}${unsyncedLocal.remoteUpdatedBy ? `, ${unsyncedLocal.remoteUpdatedBy}` : ''})`
+                  : ''}
+                . Ничего не теряется: у каждой карточки есть история версий.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button
+                onClick={keepLocalCopy}
+                className="px-3 py-2 rounded-xl text-xs font-semibold bg-amber-500/20 border border-amber-500/40 text-amber-200 hover:bg-amber-500/30 transition-colors"
+              >
+                Отправить на портал
+              </button>
+              <button
+                onClick={discardLocalCopy}
+                className="px-3 py-2 rounded-xl text-xs font-semibold bg-zinc-800/60 border border-zinc-700/60 text-zinc-300 hover:text-white transition-colors"
+              >
+                Показать версию портала
+              </button>
+            </div>
+          </motion.div>
+        )}
+
         {isShared && syncStatus === 'error' && (
           <motion.div
             initial={{ opacity: 0, y: -10 }}
@@ -292,6 +341,7 @@ export default function App() {
               onDelete={deleteCard}
               onDuplicate={duplicateCard}
               onMove={moveCard}
+              loadHistory={loadCardHistory}
             />
           </motion.div>
         </main>
@@ -312,13 +362,20 @@ export default function App() {
               KPI, графики (столбчатые, линейные, с областями, круговые), сметы, списки, карточки ответственных
               и события (со счётчиком дней до/после даты).
             </p>
+            <p className="flex items-start gap-1.5">
+              <History className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0 mt-0.5" />
+              <span>
+                У каждой карточки внизу есть «История изменений» — ползунок листает сохранённые версии этой
+                карточки с датой и автором правки, а кнопка «Восстановить» (в режиме редактирования) возвращает
+                выбранную версию. Ничего из внесённого не пропадает.
+              </span>
+            </p>
             {isShared ? (
               <p>
-                Приложение открыто внутри Битрикс24 — все изменения сохраняются в общих данных портала
-                (<code className="bg-[#1c1c1f] px-1.5 py-0.5 rounded text-indigo-400 border border-[#2d2d34] font-mono">app.option</code>)
-                и видны любому сотруднику, открывшему инфоцентр. Правки других пользователей подтягиваются при
-                возврате на вкладку или по кнопке обновления рядом с режимом редактирования; если два человека
-                правят одновременно, сохраняется последняя версия.
+                Приложение открыто внутри Битрикс24 — изменения сохраняются в общем хранилище инфоцентра и видны
+                любому сотруднику, открывшему его. Правки коллег подтягиваются при возврате на вкладку, раз в
+                минуту и по кнопке обновления. Если двое правят одновременно, изменения обеих вкладок сливаются
+                по карточкам, а не затирают друг друга.
               </p>
             ) : (
               <p>
