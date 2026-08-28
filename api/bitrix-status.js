@@ -3,6 +3,7 @@
 // https://infocenter-rck.vercel.app/api/bitrix-status
 import { peekServiceToken, peekLastOpenAttempt } from './_bitrixAuth.js';
 import { peekDashboard } from './_store.js';
+import { getDepartmentTree, departmentTreeError, LEGACY_BOARD_ID } from './_access.js';
 
 export default async function handler(req, res) {
   const hasRedisUrl = Boolean(process.env.REDIS_URL);
@@ -28,8 +29,13 @@ export default async function handler(req, res) {
     const [token, lastOpenAttempt, dashboard] = await Promise.all([
       peekServiceToken(),
       peekLastOpenAttempt(),
-      peekDashboard().catch(() => null),
+      peekDashboard(LEGACY_BOARD_ID).catch(() => null),
     ]);
+
+    // Видно ли приложению структуру отделов — от этого зависит, работают ли
+    // отдельные инфоцентры по отделам или все видят общий инфоцентр РЦК.
+    const departments = await getDepartmentTree().catch(() => null);
+    const departmentsError = departments ? null : await departmentTreeError().catch(() => null);
     res.status(200).json({
       ok: true,
       deployedCommit,
@@ -38,6 +44,12 @@ export default async function handler(req, res) {
       // Данные инфоцентра теперь живут в Redis; сервисный токен нужен только
       // для резервной копии в app.option и переноса старых данных.
       dashboard,
+      departments: departments
+        ? { count: departments.length, withHead: departments.filter((d) => d.headId).length }
+        : null,
+      departmentsError,
+      legacyDepartmentId: process.env.INFOCENTER_LEGACY_DEPARTMENT_ID || null,
+      hiddenDepartments: process.env.INFOCENTER_HIDDEN_DEPARTMENTS || null,
       serviceToken: token
         ? { restBase: token.restBase, valid: token.valid, expiresAt: new Date(token.expiresAt).toISOString() }
         : null,

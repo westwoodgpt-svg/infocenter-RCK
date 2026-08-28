@@ -1,7 +1,8 @@
 // Совместимость со старыми вкладками, у которых ещё загружен предыдущий бандл:
-// они шлют состояние сюда. Пишем через то же хранилище, что и /api/dashboard,
-// чтобы данные из старой и новой версии не расходились.
+// они шлют состояние сюда, ничего не зная о разделении по отделам. Пишем в
+// исторический инфоцентр РЦК — тот самый, который такая вкладка и показывает.
 import { getUserProfile } from './_bitrixAuth.js';
+import { LEGACY_BOARD_ID } from './_access.js';
 import { saveDashboard } from './_store.js';
 
 export default async function handler(req, res) {
@@ -35,7 +36,7 @@ export default async function handler(req, res) {
   try {
     // baseRev не приходит от старого клиента — сохраняем как есть, поверх
     // текущей версии (правки при этом всё равно попадают в историю карточек).
-    const saved = await saveDashboard({ state, baseRev: null, author: profile.name });
+    const saved = await saveDashboard({ prefix: LEGACY_BOARD_ID, state, baseRev: null, author: profile.name });
     res.status(200).json({ ok: true, rev: saved.rev });
   } catch (err) {
     res.status(err && err.tooLarge ? 413 : 502).json({ ok: false, error: err instanceof Error ? err.message : String(err) });

@@ -227,6 +227,38 @@ export async function verifyUserToken({ accessToken, domain }) {
   return Boolean(await getUserProfile({ accessToken, domain }));
 }
 
+// Вызов REST-метода портала сервисным токеном приложения. Пагинация Битрикс24
+// (start/next) разворачивается вызывающим кодом — здесь только один запрос.
+export async function bxServiceCall(method, params = {}) {
+  const token = await getServiceToken();
+  const url = new URL(`${token.restBase}${method}`);
+  url.searchParams.set('auth', token.access_token);
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
+  const res = await fetch(url.toString());
+  const data = await res.json();
+  if (data.error) {
+    const err = new Error(data.error_description || data.error);
+    err.bxErrorCode = data.error;
+    throw err;
+  }
+  return data;
+}
+
+// Вызов REST-метода от имени самого сотрудника (его токеном из BX24.getAuth()).
+export async function bxUserCall(method, { accessToken, domain }, params = {}) {
+  const url = new URL(`https://${domain}/rest/${method}`);
+  url.searchParams.set('auth', accessToken);
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
+  const res = await fetch(url.toString());
+  const data = await res.json();
+  if (data.error) {
+    const err = new Error(data.error_description || data.error);
+    err.bxErrorCode = data.error;
+    throw err;
+  }
+  return data;
+}
+
 // Чтение app.option сервисным токеном — нужно ровно один раз, при миграции
 // ранее сохранённого дашборда из app.option в Redis (см. api/_store.js).
 export async function bxAppOptionGet(key) {

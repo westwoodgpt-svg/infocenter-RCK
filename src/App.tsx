@@ -1,4 +1,4 @@
-import { ChangeEvent, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   ShieldCheck,
@@ -22,17 +22,22 @@ import {
   AlertTriangle,
   UploadCloud,
   History,
+  Eye as EyeIcon,
+  Info as InfoIcon,
 } from 'lucide-react';
 
 import { TabId, DashboardState, AnyCard } from './types';
 import { useDashboardStore } from './store';
 import TabBoard from './components/TabBoard';
+import BoardSwitcher from './components/BoardSwitcher';
+import SummaryBoard from './components/SummaryBoard';
 import logoHeader from './assets/logo-header.svg';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('security');
   const [editMode, setEditMode] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const {
     state,
@@ -53,8 +58,33 @@ export default function App() {
     unsyncedLocal,
     keepLocalCopy,
     discardLocalCopy,
+    boards,
+    activeBoardId,
+    activeBoard,
+    canEdit,
+    role,
+    canSeeSummary,
+    accessWarning,
+    switchBoard,
+    loadSummary,
   } = useDashboardStore();
   const isShared = syncMode === 'bitrix';
+
+  // Право на правку зависит от инфоцентра: свой отдел — правим, вышестоящий —
+  // только смотрим. Переключились на чужой — режим редактирования выключаем.
+  useEffect(() => {
+    if (!canEdit && editMode) setEditMode(false);
+  }, [canEdit, editMode]);
+
+  const openBoardFromSummary = (boardId: string) => {
+    setSummaryOpen(false);
+    void switchBoard(boardId);
+  };
+
+  const selectBoard = (boardId: string) => {
+    setSummaryOpen(false);
+    void switchBoard(boardId);
+  };
 
   const formattedToday = useMemo(() => {
     return new Date().toLocaleDateString('ru-RU', { year: 'numeric', month: 'long', day: 'numeric' });
@@ -138,16 +168,29 @@ export default function App() {
             <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-white font-display flex flex-wrap items-center gap-x-3 gap-y-1.5">
               Инфоцентр
               <img src={logoHeader} alt="РЦК" className="h-6 md:h-7 w-auto" />
+              {isShared && (activeBoard || summaryOpen) && (
+                <span className="text-lg md:text-xl font-bold text-[#a1a1aa]">
+                  · {summaryOpen ? 'сводный экран' : activeBoard!.title}
+                </span>
+              )}
             </h1>
             <div className="flex flex-wrap items-center gap-4 text-xs text-[#a1a1aa] pt-1.5">
               <span className="flex items-center gap-1.5 bg-[#161619] px-3 py-1 rounded-full border border-[#27272a]">
                 <Clock className="w-3.5 h-3.5 text-indigo-400" />
                 <span>Сегодня: <span className="text-white">{formattedToday}</span></span>
               </span>
-              <span className="flex items-center gap-1.5 bg-[#161619] px-3 py-1 rounded-full border border-[#27272a]">
-                <CheckCircle2 className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Карточек всего: <span className="text-white">{totalCards}</span></span>
-              </span>
+              {!summaryOpen && (
+                <span className="flex items-center gap-1.5 bg-[#161619] px-3 py-1 rounded-full border border-[#27272a]">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Карточек всего: <span className="text-white">{totalCards}</span></span>
+                </span>
+              )}
+              {isShared && !summaryOpen && activeBoard && !activeBoard.canEdit && (
+                <span className="flex items-center gap-1.5 bg-[#161619] px-3 py-1 rounded-full border border-[#27272a] text-[#a1a1aa]">
+                  <EyeIcon className="w-3.5 h-3.5 text-zinc-500" />
+                  <span>Только просмотр — это инфоцентр другого отдела</span>
+                </span>
+              )}
               {syncMode !== 'checking' && (
                 <span
                   className={`flex items-center gap-1.5 px-3 py-1 rounded-full border ${
@@ -179,6 +222,17 @@ export default function App() {
 
           <div className="flex items-center gap-2">
             {isShared && (
+              <BoardSwitcher
+                boards={boards}
+                activeBoardId={activeBoardId}
+                role={role}
+                summaryOpen={summaryOpen}
+                canSeeSummary={canSeeSummary}
+                onSelect={selectBoard}
+                onOpenSummary={() => setSummaryOpen(true)}
+              />
+            )}
+            {isShared && !summaryOpen && (
               <button
                 onClick={refresh}
                 disabled={syncStatus === 'saving'}
@@ -188,19 +242,21 @@ export default function App() {
                 <RefreshCw className={`w-4 h-4 ${syncStatus === 'saving' ? 'animate-spin' : ''}`} />
               </button>
             )}
-            <button
-              onClick={() => setEditMode((v) => !v)}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-colors ${
-                editMode
-                  ? 'bg-indigo-500/15 border-indigo-500/40 text-indigo-300'
-                  : 'bg-zinc-800/60 border-zinc-700/60 text-zinc-300 hover:text-white'
-              }`}
-            >
-              {editMode ? <Pencil className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-              {editMode ? 'Режим редактирования' : 'Режим просмотра'}
-            </button>
+            {canEdit && !summaryOpen && (
+              <button
+                onClick={() => setEditMode((v) => !v)}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-colors ${
+                  editMode
+                    ? 'bg-indigo-500/15 border-indigo-500/40 text-indigo-300'
+                    : 'bg-zinc-800/60 border-zinc-700/60 text-zinc-300 hover:text-white'
+                }`}
+              >
+                {editMode ? <Pencil className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                {editMode ? 'Режим редактирования' : 'Режим просмотра'}
+              </button>
+            )}
 
-            <div className="relative">
+            <div className={`relative ${canEdit && !summaryOpen ? '' : 'hidden'}`}>
               <button
                 onClick={() => setMenuOpen((v) => !v)}
                 className="p-2.5 rounded-xl bg-zinc-800/60 border border-zinc-700/60 text-zinc-300 hover:text-white transition-colors"
@@ -254,7 +310,9 @@ export default function App() {
                 >
                   <Icon className={`w-4 h-4 transition-all duration-300 ${isActive ? 'scale-110 opacity-100' : 'opacity-60'}`} />
                   <span>{tab.label}</span>
-                  <span className="text-[10px] font-mono text-[#71717a]">{state[tab.id as TabId].length}</span>
+                  {!summaryOpen && (
+                    <span className="text-[10px] font-mono text-[#71717a]">{state[tab.id as TabId].length}</span>
+                  )}
                   {isActive && (
                     <motion.div
                       layoutId="activeTabIndicator"
@@ -267,6 +325,17 @@ export default function App() {
             })}
           </div>
         </motion.nav>
+
+        {accessWarning && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="elegant-card rounded-2xl p-4 border border-sky-500/25 bg-sky-500/5 flex items-start gap-3"
+          >
+            <InfoIcon className="w-5 h-5 text-sky-400 flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-sky-100/80 leading-relaxed">{accessWarning}</p>
+          </motion.div>
+        )}
 
         {unsyncedLocal && (
           <motion.div
@@ -331,7 +400,17 @@ export default function App() {
         )}
 
         <main className="min-h-[400px]">
-          <motion.div key={activeTab} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
+          {summaryOpen ? (
+            <motion.div key={`summary-${activeTab}`} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
+              <SummaryBoard
+                tab={activeTab}
+                tabLabel={tabs.find((t) => t.id === activeTab)?.label || ''}
+                loadSummary={loadSummary}
+                onOpenBoard={openBoardFromSummary}
+              />
+            </motion.div>
+          ) : (
+          <motion.div key={`${activeBoardId}-${activeTab}`} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
             <TabBoard
               tab={activeTab}
               cards={state[activeTab]}
@@ -344,6 +423,7 @@ export default function App() {
               loadHistory={loadCardHistory}
             />
           </motion.div>
+          )}
         </main>
 
         <motion.footer
@@ -362,6 +442,14 @@ export default function App() {
               KPI, графики (столбчатые, линейные, с областями, круговые), сметы, списки, карточки ответственных
               и события (со счётчиком дней до/после даты).
             </p>
+            {isShared && (
+              <p>
+                У каждого отдела свой инфоцентр. Вам сразу открывается инфоцентр вашего отдела — его вы и правите;
+                инфоцентры вышестоящих подразделений доступны только для просмотра. Руководитель отдела правит свой
+                отдел и все подотделы, а директор и администратор портала — все инфоцентры и сводный экран по
+                отделам (переключатель в шапке).
+              </p>
+            )}
             <p className="flex items-start gap-1.5">
               <History className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0 mt-0.5" />
               <span>

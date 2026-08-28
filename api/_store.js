@@ -10,10 +10,18 @@
 // Redis (тот же инстанс, что и сервисный токен), а app.option используется
 // только как резервная копия, когда состояние достаточно маленькое.
 import { getServiceToken, bxAppOptionGet, bxAppOptionSet, redisClient } from './_bitrixAuth.js';
+import { LEGACY_BOARD_ID } from './_access.js';
 
-const CURRENT_KEY = 'rck:dashboard:current';
-const snapshotKey = (rev) => `rck:dashboard:snap:${rev}`;
-const cardHistoryKey = (tab, cardId) => `rck:card-history:${tab}:${cardId}`;
+// Каждый инфоцентр (отдел) — свой набор ключей. Префикс `rck` принадлежит
+// историческому общему инфоцентру РЦК: его ключи не переименовывались, чтобы
+// уже внесённые данные остались на месте (см. storagePrefixFor в _access.js).
+const currentKey = (prefix) => `rck:board:${prefix}:current`;
+const snapshotKey = (prefix, rev) => `rck:board:${prefix}:snap:${rev}`;
+const cardHistoryKey = (prefix, tab, cardId) => `rck:card-history:${prefix}:${tab}:${cardId}`;
+
+// Ключи до разделения по отделам — читаются как запасной вариант для РЦК.
+const LEGACY_CURRENT_KEY = 'rck:dashboard:current';
+const legacyCardHistoryKey = (tab, cardId) => `rck:card-history:${tab}:${cardId}`;
 
 // Ключ той самой опции, из которой мигрируем и в которую (по возможности)
 // продолжаем класть резервную копию.
@@ -64,8 +72,12 @@ async function readJson(key) {
 // Чтение
 // ---------------------------------------------------------------------------
 
-export async function loadDashboard() {
-  const current = await readJson(CURRENT_KEY);
+export async function loadDashboard(prefix) {
+  let current = await readJson(currentKey(prefix));
+  if (!current && prefix === LEGACY_BOARD_ID) {
+    // Данные, записанные до разделения инфоцентров по отделам.
+    current = await readJson(LEGACY_CURRENT_KEY);
+  }
   if (current && current.state) {
     return {
       state: normalizeState(current.state),
@@ -75,7 +87,9 @@ export async function loadDashboard() {
       source: 'redis',
     };
   }
-  return migrateFromAppOption();
+  // app.option — хранилище только исторического инфоцентра РЦК.
+  if (prefix === LEGACY_BOARD_ID) return migrateFromAppOption();
+  return null;
 }
 
 // Однократный перенос ранее введённых данных из app.option в Redis. Вызывается
@@ -104,8 +118,8 @@ async function migrateFromAppOption() {
     updatedAt: new Date().toISOString(),
     updatedBy: 'перенос из app.option',
   };
-  await redisClient().set(CURRENT_KEY, JSON.stringify(record));
-  await writeSnapshot(1, state);
+  await redisClient().set(currentKey(LEGACY_BOARD_ID), JSON.stringify(record));
+  await writeSnapshot(LEGACY_BOARD_ID, 1, state);
   return { ...record, source: 'app.option' };
 }
 
@@ -113,7 +127,8 @@ async function migrateFromAppOption() {
 // Запись
 // ---------------------------------------------------------------------------
 
-export async function saveDashboard({ state: incomingRaw, baseRev, author }) {
+export async function saveDashboard({ prefix, state: incomingRaw, baseRev, author }) {
+  if (!prefix) throw new Error('не указан инфоцентр для сохранения');
   const incoming = normalizeState(incomingRaw);
   const serialized = JSON.stringify(incoming);
   if (serialized.length > MAX_STATE_BYTES) {
@@ -124,7 +139,8 @@ export async function saveDashboard({ state: incomingRaw, baseRev, author }) {
     throw err;
   }
 
-  const current = await readJson(CURRENT_KEY);
+  let current = await readJson(currentKey(prefix));
+  if (!current && prefix === LEGACY_BOARD_ID) current = await readJson(LEGACY_CURRENT_KEY);
   const prevState = current && current.state ? normalizeState(current.state) : null;
   const currentRev = current ? Number(current.rev) || 0 : 0;
 
@@ -134,7 +150,7 @@ export async function saveDashboard({ state: incomingRaw, baseRev, author }) {
     // Пока вкладка редактировала, кто-то уже сохранился. Берём снимок,
     // от которого отталкивался этот клиент, и накладываем ТОЛЬКО его правки
     // на актуальное состояние — иначе одна вкладка молча затирает другую.
-    const base = await readJson(snapshotKey(Number(baseRev)));
+    const base = await readJson(snapshotKey(prefix, Number(baseRev)));
     if (base && base.state) {
       merged = threeWayMerge(normalizeState(base.state), incoming, prevState);
       mergedWith = currentRev;
@@ -148,19 +164,19 @@ export async function saveDashboard({ state: incomingRaw, baseRev, author }) {
     updatedAt: new Date().toISOString(),
     updatedBy: author || null,
   };
-  await redisClient().set(CURRENT_KEY, JSON.stringify(record));
-  await writeSnapshot(nextRev, merged);
-  await recordHistory(prevState, merged, { rev: nextRev, at: record.updatedAt, by: author || null });
-  await mirrorToAppOption(merged);
+  await redisClient().set(currentKey(prefix), JSON.stringify(record));
+  await writeSnapshot(prefix, nextRev, merged);
+  await recordHistory(prefix, prevState, merged, { rev: nextRev, at: record.updatedAt, by: author || null });
+  if (prefix === LEGACY_BOARD_ID) await mirrorToAppOption(merged);
 
   return { rev: nextRev, updatedAt: record.updatedAt, state: merged, mergedWith };
 }
 
-async function writeSnapshot(rev, state) {
+async function writeSnapshot(prefix, rev, state) {
   const payload = JSON.stringify({ rev, state });
   if (payload.length > SNAPSHOT_MAX_BYTES) return; // слишком тяжёлое — обойдёмся без слияния
   try {
-    await redisClient().set(snapshotKey(rev), payload, 'EX', SNAPSHOT_TTL_SEC);
+    await redisClient().set(snapshotKey(prefix, rev), payload, 'EX', SNAPSHOT_TTL_SEC);
   } catch {
     // снимок — вспомогательные данные, его потеря не должна ронять сохранение
   }
@@ -259,7 +275,7 @@ export function diffCards(prevState, nextState) {
   return changes;
 }
 
-async function recordHistory(prevState, nextState, meta) {
+async function recordHistory(prefix, prevState, nextState, meta) {
   const changes = diffCards(prevState, nextState);
   if (!changes.length) return;
 
@@ -278,7 +294,7 @@ async function recordHistory(prevState, nextState, meta) {
       // изображения — иначе таймлайн одной карточки выест всю базу.
       payload = JSON.stringify({ ...entry, card: { ...change.card, imageUrl: '' }, trimmed: true });
     }
-    const key = cardHistoryKey(change.tab, change.cardId);
+    const key = cardHistoryKey(prefix, change.tab, change.cardId);
     try {
       await redis.lpush(key, payload);
       await redis.ltrim(key, 0, HISTORY_MAX_ENTRIES - 1);
@@ -304,8 +320,9 @@ async function trimHistoryBySize(key) {
 }
 
 // Краткая сводка для диагностического эндпоинта — без содержимого карточек.
-export async function peekDashboard() {
-  const raw = await redisClient().get(CURRENT_KEY);
+export async function peekDashboard(prefix) {
+  const raw = (await redisClient().get(currentKey(prefix))) ||
+    (prefix === LEGACY_BOARD_ID ? await redisClient().get(LEGACY_CURRENT_KEY) : null);
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw);
@@ -321,8 +338,11 @@ export async function peekDashboard() {
 }
 
 // Версии карточки от старых к новым — в таком порядке их ждёт ползунок.
-export async function cardHistory(tab, cardId) {
-  const rows = await redisClient().lrange(cardHistoryKey(tab, cardId), 0, -1);
+export async function cardHistory(prefix, tab, cardId) {
+  let rows = await redisClient().lrange(cardHistoryKey(prefix, tab, cardId), 0, -1);
+  if (!rows.length && prefix === LEGACY_BOARD_ID) {
+    rows = await redisClient().lrange(legacyCardHistoryKey(tab, cardId), 0, -1);
+  }
   const entries = [];
   for (const raw of rows) {
     try {

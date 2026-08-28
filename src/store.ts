@@ -1,20 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AnyCard, DashboardState, TabId } from './types';
+import { AnyCard, BoardInfo, BootstrapInfo, DashboardState, SummarySection, TabId, UserRole } from './types';
 import { SEED_DATA, EMPTY_DASHBOARD } from './seedData';
 import {
+  bootstrapRemote,
   bx24Init,
   CardHistoryEntry,
   fetchCardHistoryRemote,
+  fetchSummaryRemote,
   isInIframe,
+  LEGACY_BOARD_ID,
   loadDashboardRemote,
   saveDashboardRemote,
 } from './bitrix';
 import { readLocalCardHistory, recordLocalHistory } from './history';
 
-const STORAGE_KEY = 'rck-dashboard-v1';
+// Кэш инфоцентра в браузере: свой на каждый отдел.
+const CACHE_PREFIX = 'rck-dashboard-v2:';
+// Ключ до разделения по отделам — переносится в кэш того инфоцентра, где теперь
+// живут исторические данные РЦК.
+const LEGACY_CACHE_KEY = 'rck-dashboard-v1';
+const ACTIVE_BOARD_KEY = 'rck-active-board';
 
-// Сохранение на портал: собираем правки за короткую паузу и отправляем одним
-// запросом, но не дольше — сотрудник не должен гадать, «дошло или нет».
+/** Псевдо-инфоцентр для работы вне Битрикс24 (данные только в этом браузере). */
+export const LOCAL_BOARD_ID = 'local';
+
 const SAVE_DEBOUNCE_MS = 500;
 const RETRY_DELAYS_MS = [4000, 10000, 20000, 30000];
 const POLL_INTERVAL_MS = 45000;
@@ -31,38 +40,59 @@ interface CachedDashboard {
   savedAt: string | null;
 }
 
-function loadCache(): CachedDashboard {
+const emptyCache = (state: DashboardState): CachedDashboard => ({ state, rev: 0, dirty: false, savedAt: null });
+
+function parseCache(raw: string | null): CachedDashboard | null {
+  if (!raw) return null;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as CachedDashboard | DashboardState;
-      if (parsed && typeof parsed === 'object' && 'state' in parsed && parsed.state) {
-        const cached = parsed as CachedDashboard;
-        return {
-          state: cached.state,
-          rev: Number(cached.rev) || 0,
-          dirty: Boolean(cached.dirty),
-          savedAt: cached.savedAt || null,
-        };
-      }
-      // Формат до 28.08.2026 — просто состояние дашборда. Такой кэш мог остаться
-      // от правок, которые не доехали до портала из-за старой ошибки сохранения,
-      // поэтому помечаем его как несохранённый и предлагаем восстановить.
-      if (parsed && typeof parsed === 'object' && Array.isArray((parsed as DashboardState).security)) {
-        return { state: parsed as DashboardState, rev: 0, dirty: true, savedAt: null };
-      }
+    const parsed = JSON.parse(raw) as CachedDashboard | DashboardState;
+    if (parsed && typeof parsed === 'object' && 'state' in parsed && parsed.state) {
+      const cached = parsed as CachedDashboard;
+      return {
+        state: cached.state,
+        rev: Number(cached.rev) || 0,
+        dirty: Boolean(cached.dirty),
+        savedAt: cached.savedAt || null,
+      };
+    }
+    // Формат до 28.08.2026 — просто состояние дашборда. Такой кэш мог остаться
+    // от правок, не доехавших до портала из-за старой ошибки сохранения,
+    // поэтому считаем его несохранённым и предлагаем восстановить.
+    if (parsed && typeof parsed === 'object' && Array.isArray((parsed as DashboardState).security)) {
+      return { state: parsed as DashboardState, rev: 0, dirty: true, savedAt: null };
     }
   } catch {
-    // повреждённый кэш — стартуем с примера
+    // повреждённый кэш — игнорируем
   }
-  return { state: SEED_DATA, rev: 0, dirty: false, savedAt: null };
+  return null;
 }
 
-function persist(cache: CachedDashboard) {
+function readCache(boardId: string): CachedDashboard | null {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(cache));
+    return parseCache(localStorage.getItem(CACHE_PREFIX + boardId));
+  } catch {
+    return null;
+  }
+}
+
+function writeCacheFor(boardId: string, cache: CachedDashboard) {
+  try {
+    localStorage.setItem(CACHE_PREFIX + boardId, JSON.stringify(cache));
   } catch {
     // хранилище недоступно (приватный режим, квота) — правки останутся в памяти
+  }
+}
+
+// Старый кэш (когда инфоцентр был один) переносим в тот инфоцентр, где теперь
+// лежат эти данные. Важно не потерять правки, не доехавшие до портала.
+function adoptLegacyCache(boardId: string) {
+  try {
+    const legacy = localStorage.getItem(LEGACY_CACHE_KEY);
+    if (!legacy) return;
+    if (!localStorage.getItem(CACHE_PREFIX + boardId)) localStorage.setItem(CACHE_PREFIX + boardId, legacy);
+    localStorage.removeItem(LEGACY_CACHE_KEY);
+  } catch {
+    // не критично
   }
 }
 
@@ -75,40 +105,60 @@ export function newCardId() {
 const sameState = (a: DashboardState, b: DashboardState) => JSON.stringify(a) === JSON.stringify(b);
 
 export interface UnsyncedLocalCopy {
-  /** Версия с портала — её показываем, если сотрудник отказывается от локальной. */
+  boardId: string;
   remoteState: DashboardState;
   remoteRev: number;
   remoteUpdatedAt: string | null;
   remoteUpdatedBy: string | null;
 }
 
+const LOCAL_BOARD: BoardInfo = { id: LOCAL_BOARD_ID, title: 'Инфоцентр (этот браузер)', canEdit: true };
+
 export function useDashboardStore() {
-  const initial = useRef<CachedDashboard>(loadCache());
-  const [state, setStateRaw] = useState<DashboardState>(initial.current.state);
+  const [state, setStateRaw] = useState<DashboardState>(SEED_DATA);
   const [syncMode, setSyncMode] = useState<SyncMode>('checking');
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
   const [syncError, setSyncError] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
   const [unsyncedLocal, setUnsyncedLocal] = useState<UnsyncedLocalCopy | null>(null);
 
-  // Вся синхронизация опирается на ref-ы, а не на состояние React: обработчики
-  // (таймеры, focus, повторные попытки) должны видеть актуальные значения, а не
-  // те, что были на момент их создания.
-  const stateRef = useRef<DashboardState>(initial.current.state);
-  const revRef = useRef<number>(initial.current.rev);
-  const dirtyRef = useRef<boolean>(initial.current.dirty);
-  const savedAtRef = useRef<string | null>(initial.current.savedAt);
+  // Инфоцентры, доступные открывшему приложение (определяет сервер по отделам).
+  const [boards, setBoardsState] = useState<BoardInfo[]>([]);
+  const [activeBoardId, setActiveBoardId] = useState<string>(LOCAL_BOARD_ID);
+  const [role, setRole] = useState<UserRole>('employee');
+  const [me, setMe] = useState<BootstrapInfo['me'] | null>(null);
+  const [canSeeSummary, setCanSeeSummary] = useState(false);
+  const [accessWarning, setAccessWarning] = useState<string | null>(null);
+
+  // Синхронизация живёт на ref-ах: таймеры и обработчики должны видеть
+  // актуальные значения, а не те, что были на момент их создания.
+  const stateRef = useRef<DashboardState>(SEED_DATA);
+  const boardRef = useRef<string>(LOCAL_BOARD_ID);
+  const legacyBoardRef = useRef<string>(LEGACY_BOARD_ID);
+  const revRef = useRef(0);
+  const dirtyRef = useRef(false);
+  const savedAtRef = useRef<string | null>(null);
   const editSeqRef = useRef(0);
   const savingRef = useRef(false);
+  const modeRef = useRef<SyncMode>('checking');
+  const canEditRef = useRef(true);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryStepRef = useRef(0);
   // Пока сотрудник не решил, что делать с локальной копией, ничего не
   // отправляем и не подтягиваем — иначе выбор сделается за него.
   const awaitingChoiceRef = useRef(false);
-  const modeRef = useRef<SyncMode>('checking');
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const retryStepRef = useRef(0);
+
+  const boardsRef = useRef<BoardInfo[]>([]);
+  const setBoards = useCallback((list: BoardInfo[]) => {
+    boardsRef.current = list;
+    setBoardsState(list);
+  }, []);
+
+  const activeBoard = boards.find((b) => b.id === activeBoardId) || null;
+  const canEdit = activeBoard ? activeBoard.canEdit : syncMode === 'local';
 
   const writeCache = useCallback(() => {
-    persist({
+    writeCacheFor(boardRef.current, {
       state: stateRef.current,
       rev: revRef.current,
       dirty: dirtyRef.current,
@@ -116,8 +166,8 @@ export function useDashboardStore() {
     });
   }, []);
 
-  // Применение состояния, пришедшего с сервера: свои правки при этом не теряем,
-  // потому что вызывается только когда локальных несохранённых изменений нет.
+  // Применение состояния, пришедшего с сервера. Вызывается только когда
+  // локальных несохранённых изменений нет — свои правки не теряем.
   const applyRemote = useCallback(
     (next: DashboardState, rev: number) => {
       stateRef.current = next;
@@ -135,16 +185,19 @@ export function useDashboardStore() {
     if (awaitingChoiceRef.current) return;
     if (savingRef.current) return; // текущее сохранение по завершении заберёт свежие правки
     if (!dirtyRef.current) return;
+    if (!canEditRef.current) return; // права проверяет и сервер, но незачем ломиться зря
 
     savingRef.current = true;
+    const boardId = boardRef.current;
     const snapshot = stateRef.current;
     const seqAtStart = editSeqRef.current;
     const baseRev = revRef.current;
     setSyncStatus('saving');
 
-    const { ok, rev, state: merged, error } = await saveDashboardRemote(snapshot, baseRev);
+    const { ok, rev, state: merged, error } = await saveDashboardRemote(boardId, snapshot, baseRev);
 
     savingRef.current = false;
+    if (boardRef.current !== boardId) return; // за время запроса переключились на другой инфоцентр
 
     if (!ok) {
       setSyncStatus('error');
@@ -164,8 +217,7 @@ export function useDashboardStore() {
     dirtyRef.current = newerEdits;
 
     // Сервер мог слить наши правки с чужими (кто-то сохранился параллельно) —
-    // тогда забираем результат слияния, но только если пользователь за это
-    // время ничего нового не изменил.
+    // забираем результат слияния, если пользователь за это время ничего не менял.
     if (!newerEdits && merged && !sameState(merged, snapshot)) {
       stateRef.current = merged;
       setStateRaw(merged);
@@ -191,6 +243,7 @@ export function useDashboardStore() {
   // несохранённой и ставит сохранение в очередь.
   const mutate = useCallback(
     (fn: (prev: DashboardState) => DashboardState) => {
+      if (!canEditRef.current) return;
       const prev = stateRef.current;
       const next = fn(prev);
       if (next === prev) return;
@@ -213,16 +266,19 @@ export function useDashboardStore() {
   );
 
   const pull = useCallback(
-    async ({ force = false, announce = false }: { force?: boolean; announce?: boolean } = {}) => {
-      if (modeRef.current !== 'bitrix' && !force) return;
+    async ({ announce = false }: { announce?: boolean } = {}) => {
+      if (modeRef.current !== 'bitrix') return;
       if (awaitingChoiceRef.current) return;
       // Никогда не затираем несохранённые правки чтением с сервера — именно
       // из-за этого раньше внесённые данные «мигали» и пропадали.
-      if (!force && (dirtyRef.current || savingRef.current)) return;
+      if (dirtyRef.current || savingRef.current) return;
 
       // Фоновый опрос не мигает статусом в шапке — только явное обновление.
       if (announce) setSyncStatus('saving');
-      const { data, error } = await loadDashboardRemote();
+      const boardId = boardRef.current;
+      const { data, error } = await loadDashboardRemote(boardId, legacyBoardRef.current);
+      if (boardRef.current !== boardId) return;
+
       if (error) {
         setSyncStatus('error');
         setSyncError(error);
@@ -230,12 +286,9 @@ export function useDashboardStore() {
       }
       setSyncError(null);
 
-      if (data && data.state) {
+      if (data && data.state && !dirtyRef.current && !savingRef.current) {
         const remoteIsNewer = data.rev !== revRef.current && (data.rev > revRef.current || revRef.current === 0);
-        if (!dirtyRef.current && !savingRef.current && remoteIsNewer) {
-          applyRemote(data.state, data.rev);
-        } else if (!dirtyRef.current && data.rev === revRef.current && !sameState(data.state, stateRef.current)) {
-          // одинаковая версия, но содержимое разошлось — доверяем серверу
+        if (remoteIsNewer || (data.rev === revRef.current && !sameState(data.state, stateRef.current))) {
           applyRemote(data.state, data.rev);
         }
       }
@@ -245,30 +298,36 @@ export function useDashboardStore() {
     [applyRemote]
   );
 
-  // Первичная инициализация: определяем, открыт ли инфоцентр внутри Битрикс24,
-  // и подтягиваем общие данные портала.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!isInIframe()) {
-        modeRef.current = 'local';
-        setSyncMode('local');
-        return;
+  // Открыть инфоцентр: поднять кэш этого отдела, показать его и подтянуть
+  // актуальную версию с сервера.
+  const openBoard = useCallback(
+    async (boardId: string, { fromCacheOnly = false }: { fromCacheOnly?: boolean } = {}) => {
+      boardRef.current = boardId;
+      const board = boardsRef.current.find((b) => b.id === boardId);
+      canEditRef.current = board ? board.canEdit : modeRef.current !== 'bitrix';
+      setActiveBoardId(boardId);
+      try {
+        localStorage.setItem(ACTIVE_BOARD_KEY, boardId);
+      } catch {
+        // не критично
       }
-      const ready = await bx24Init();
-      if (cancelled) return;
-      if (!ready) {
-        modeRef.current = 'local';
-        setSyncMode('local');
-        return;
-      }
+
+      const cache = readCache(boardId) || emptyCache(EMPTY_DASHBOARD);
+      stateRef.current = cache.state;
+      revRef.current = cache.rev;
+      dirtyRef.current = cache.dirty;
+      savedAtRef.current = cache.savedAt;
+      editSeqRef.current += 1;
+      awaitingChoiceRef.current = false;
+      setUnsyncedLocal(null);
+      setStateRaw(cache.state);
+      setSyncError(null);
+
+      if (fromCacheOnly || modeRef.current !== 'bitrix') return;
 
       setSyncStatus('saving');
-      const { data, error } = await loadDashboardRemote();
-      if (cancelled) return;
-
-      modeRef.current = 'bitrix';
-      setSyncMode('bitrix');
+      const { data, error } = await loadDashboardRemote(boardId, legacyBoardRef.current);
+      if (boardRef.current !== boardId) return;
 
       if (error) {
         setSyncStatus('error');
@@ -277,35 +336,108 @@ export function useDashboardStore() {
       }
 
       if (!data || !data.state) {
-        // На портале ещё ничего не сохранено. Если в браузере есть правки —
-        // отправляем их: терять нечего, а данные должны стать общими.
+        // Инфоцентр этого отдела ещё пуст. Если в браузере есть правки — они
+        // уйдут на портал: терять нечего.
         if (dirtyRef.current) scheduleSave();
         setLastSyncedAt(new Date());
         setSyncStatus(dirtyRef.current ? 'saving' : 'saved');
         return;
       }
 
-      {
-        if (!dirtyRef.current) {
-          applyRemote(data.state, data.rev);
-        } else if (sameState(data.state, stateRef.current)) {
-          // локальная копия совпала с порталом — «несохранённого» на самом деле нет
-          applyRemote(data.state, data.rev);
-        } else {
-          // В браузере остались правки, не доехавшие до портала (последствия
-          // старой ошибки сохранения). Показываем их и даём выбор — отправить
-          // на портал или отказаться. Молча терять их нельзя.
-          awaitingChoiceRef.current = true;
-          setUnsyncedLocal({
-            remoteState: data.state,
-            remoteRev: data.rev,
-            remoteUpdatedAt: data.updatedAt,
-            remoteUpdatedBy: data.updatedBy,
-          });
-        }
+      if (!dirtyRef.current || sameState(data.state, stateRef.current)) {
+        applyRemote(data.state, data.rev);
+      } else {
+        // В браузере остались правки, не доехавшие до портала (последствия
+        // старой ошибки сохранения). Показываем их и даём выбор.
+        awaitingChoiceRef.current = true;
+        setUnsyncedLocal({
+          boardId,
+          remoteState: data.state,
+          remoteRev: data.rev,
+          remoteUpdatedAt: data.updatedAt,
+          remoteUpdatedBy: data.updatedBy,
+        });
       }
       setLastSyncedAt(new Date());
       setSyncStatus(dirtyRef.current ? 'idle' : 'saved');
+    },
+    [applyRemote, scheduleSave]
+  );
+
+  // Первичная инициализация: кто открыл, какие инфоцентры доступны, какой открыть.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const startLocal = () => {
+        modeRef.current = 'local';
+        setSyncMode('local');
+        setBoards([LOCAL_BOARD]);
+        adoptLegacyCache(LOCAL_BOARD_ID);
+        const cache = readCache(LOCAL_BOARD_ID) || emptyCache(SEED_DATA);
+        boardRef.current = LOCAL_BOARD_ID;
+        setActiveBoardId(LOCAL_BOARD_ID);
+        stateRef.current = cache.state;
+        revRef.current = cache.rev;
+        dirtyRef.current = cache.dirty;
+        savedAtRef.current = cache.savedAt;
+        setStateRaw(cache.state);
+      };
+
+      if (!isInIframe()) {
+        startLocal();
+        return;
+      }
+      const ready = await bx24Init();
+      if (cancelled) return;
+      if (!ready) {
+        startLocal();
+        return;
+      }
+
+      setSyncStatus('saving');
+      const { data: info, error } = await bootstrapRemote();
+      if (cancelled) return;
+
+      if (error || !info) {
+        // Список инфоцентров получить не удалось (Redis, права, сеть). Не
+        // запираем сотрудника: открываем исторический инфоцентр РЦК — его
+        // чтение умеет запасной путь через app.option.
+        modeRef.current = 'bitrix';
+        setSyncMode('bitrix');
+        setBoards([{ id: LEGACY_BOARD_ID, title: 'Инфоцентр РЦК', canEdit: true }]);
+        setAccessWarning(`Не удалось получить список инфоцентров по отделам: ${error || 'неизвестная ошибка'}`);
+        legacyBoardRef.current = LEGACY_BOARD_ID;
+        adoptLegacyCache(LEGACY_BOARD_ID);
+        await openBoard(LEGACY_BOARD_ID);
+        return;
+      }
+
+      modeRef.current = 'bitrix';
+      setSyncMode('bitrix');
+      setBoards(info.boards);
+      setRole(info.role);
+      setMe(info.me);
+      setCanSeeSummary(info.canSeeSummary);
+      setAccessWarning(info.warning);
+      legacyBoardRef.current = info.legacyBoardId;
+      adoptLegacyCache(info.legacyBoardId);
+
+      let preferred: string | null = null;
+      try {
+        preferred = localStorage.getItem(ACTIVE_BOARD_KEY);
+      } catch {
+        preferred = null;
+      }
+      const target =
+        (preferred && info.boards.some((b) => b.id === preferred) ? preferred : null) ||
+        info.defaultBoardId ||
+        (info.boards[0] ? info.boards[0].id : null);
+
+      if (!target) {
+        setSyncStatus('idle');
+        return;
+      }
+      await openBoard(target);
     })();
     return () => {
       cancelled = true;
@@ -313,27 +445,24 @@ export function useDashboardStore() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    canEditRef.current = activeBoard ? activeBoard.canEdit : syncMode === 'local';
+  }, [activeBoard, syncMode]);
+
   // Подхватываем правки коллег: при возврате на вкладку и раз в ~45 секунд.
   useEffect(() => {
     if (syncMode !== 'bitrix') return;
-    const onVisible = () => {
-      if (document.visibilityState !== 'visible') return;
-      if (dirtyRef.current) {
-        void flushSave();
-        return;
-      }
-      void pull();
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    window.addEventListener('focus', onVisible);
-    const timer = setInterval(() => {
+    const tick = () => {
       if (document.visibilityState !== 'visible') return;
       if (dirtyRef.current) void flushSave();
       else void pull();
-    }, POLL_INTERVAL_MS);
+    };
+    document.addEventListener('visibilitychange', tick);
+    window.addEventListener('focus', tick);
+    const timer = setInterval(tick, POLL_INTERVAL_MS);
     return () => {
-      document.removeEventListener('visibilitychange', onVisible);
-      window.removeEventListener('focus', onVisible);
+      document.removeEventListener('visibilitychange', tick);
+      window.removeEventListener('focus', tick);
       clearInterval(timer);
     };
   }, [syncMode, pull, flushSave]);
@@ -355,6 +484,17 @@ export function useDashboardStore() {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     },
     []
+  );
+
+  // Переключение инфоцентра: сначала дожимаем несохранённое, потом открываем новый.
+  const switchBoard = useCallback(
+    async (boardId: string) => {
+      if (boardId === boardRef.current) return;
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      if (dirtyRef.current && modeRef.current === 'bitrix' && !awaitingChoiceRef.current) await flushSave();
+      await openBoard(boardId);
+    },
+    [flushSave, openBoard]
   );
 
   const addCard = useCallback(
@@ -419,18 +559,26 @@ export function useDashboardStore() {
   }, [flushSave, writeCache]);
 
   const discardLocalCopy = useCallback(() => {
-    const remote = unsyncedLocal;
+    const pending = unsyncedLocal;
     setUnsyncedLocal(null);
     awaitingChoiceRef.current = false;
-    if (!remote) return;
+    if (!pending || pending.boardId !== boardRef.current) return;
     dirtyRef.current = false;
-    applyRemote(remote.remoteState, remote.remoteRev);
-  }, [unsyncedLocal, applyRemote, pull]);
+    applyRemote(pending.remoteState, pending.remoteRev);
+  }, [unsyncedLocal, applyRemote]);
 
   const loadCardHistory = useCallback(
     async (tab: TabId, cardId: string): Promise<{ entries: CardHistoryEntry[]; error: string | null }> => {
-      if (modeRef.current === 'bitrix') return fetchCardHistoryRemote(tab, cardId);
+      if (modeRef.current === 'bitrix') return fetchCardHistoryRemote(boardRef.current, tab, cardId);
       return { entries: readLocalCardHistory(tab, cardId), error: null };
+    },
+    []
+  );
+
+  const loadSummary = useCallback(
+    async (tab: TabId): Promise<{ sections: SummarySection[]; error: string | null }> => {
+      if (modeRef.current !== 'bitrix') return { sections: [], error: 'сводный экран доступен только внутри Битрикс24' };
+      return fetchSummaryRemote(tab);
     },
     []
   );
@@ -444,6 +592,16 @@ export function useDashboardStore() {
     unsyncedLocal,
     keepLocalCopy,
     discardLocalCopy,
+    boards,
+    activeBoardId,
+    activeBoard,
+    canEdit,
+    role,
+    me,
+    canSeeSummary,
+    accessWarning,
+    switchBoard,
+    loadSummary,
     refresh,
     addCard,
     updateCard,

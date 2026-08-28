@@ -1,4 +1,4 @@
-import { AnyCard, DashboardState, TabId } from './types';
+import { AnyCard, BootstrapInfo, DashboardState, SummarySection, TabId } from './types';
 
 // Общее хранилище дашборда на уровне приложения Битрикс24 (app.option) —
 // один и тот же ключ виден всем пользователям портала, установившим
@@ -118,7 +118,11 @@ export interface RemoteDashboard {
   rev: number;
   updatedAt: string | null;
   updatedBy: string | null;
+  canEdit: boolean;
 }
+
+/** Идентификатор исторического инфоцентра РЦК (совпадает с LEGACY_BOARD_ID на сервере). */
+export const LEGACY_BOARD_ID = 'rck';
 
 export interface CardHistoryEntry {
   rev?: number;
@@ -212,39 +216,72 @@ async function postDashboardApi<T extends ApiResponse>(
   }
 }
 
-export async function loadDashboardRemote(): Promise<{ data: RemoteDashboard | null; error: string | null }> {
-  const { data, error } = await postDashboardApi<ApiResponse & RemoteDashboard>({ action: 'load' });
+// Кто открыл инфоцентр и какие инфоцентры ему доступны — решает сервер по
+// структуре отделов портала (см. api/_access.js).
+export async function bootstrapRemote(): Promise<{ data: BootstrapInfo | null; error: string | null }> {
+  const { data, error } = await postDashboardApi<ApiResponse & BootstrapInfo>({ action: 'bootstrap' });
+  if (error || !data) return { data: null, error };
+  return {
+    data: {
+      me: data.me,
+      role: data.role,
+      boards: data.boards || [],
+      defaultBoardId: data.defaultBoardId,
+      canSeeSummary: Boolean(data.canSeeSummary),
+      legacyBoardId: data.legacyBoardId || LEGACY_BOARD_ID,
+      warning: data.warning || null,
+    },
+    error: null,
+  };
+}
+
+// Запасное чтение из app.option имеет смысл только для исторического
+// инфоцентра РЦК — у остальных отделов там ничего не лежало.
+async function legacyFallback(boardId: string, legacyBoardId: string): Promise<RemoteDashboard | null> {
+  if (boardId !== legacyBoardId) return null;
+  const legacy = await fetchDashboardOption();
+  if (!legacy.state) return null;
+  return { state: legacy.state, rev: 0, updatedAt: null, updatedBy: null, canEdit: true };
+}
+
+export async function loadDashboardRemote(
+  boardId: string,
+  legacyBoardId: string = LEGACY_BOARD_ID
+): Promise<{ data: RemoteDashboard | null; error: string | null }> {
+  const { data, error } = await postDashboardApi<ApiResponse & RemoteDashboard>({ action: 'load', boardId });
   if (error) {
-    // Запасной путь: читаем прежнее место хранения напрямую из браузера —
-    // так данные видно, даже если наш сервер или Redis временно недоступны.
-    const legacy = await fetchDashboardOption();
-    if (legacy.state) {
-      return { data: { state: legacy.state, rev: 0, updatedAt: null, updatedBy: null }, error: null };
-    }
+    // Наш сервер или Redis недоступны — показываем хотя бы то, что лежит в
+    // app.option, чтобы инфоцентр не оказался пустым.
+    const fallback = await legacyFallback(boardId, legacyBoardId);
+    if (fallback) return { data: fallback, error: null };
     return { data: null, error };
   }
+
   if (!data!.state) {
-    // В общем хранилище пусто. Возможно, данные ещё лежат в app.option и не
-    // перенеслись (например, сервисный токен портала протух) — читаем их прямо
-    // из браузера, чтобы сотрудник в любом случае увидел внесённое раньше.
-    const legacy = await fetchDashboardOption();
-    if (legacy.state) {
-      return { data: { state: legacy.state, rev: 0, updatedAt: null, updatedBy: null }, error: null };
-    }
+    const fallback = await legacyFallback(boardId, legacyBoardId);
+    if (fallback) return { data: fallback, error: null };
   }
 
   return {
-    data: { state: data!.state, rev: data!.rev, updatedAt: data!.updatedAt, updatedBy: data!.updatedBy },
+    data: {
+      state: data!.state,
+      rev: data!.rev,
+      updatedAt: data!.updatedAt,
+      updatedBy: data!.updatedBy,
+      canEdit: data!.canEdit !== false,
+    },
     error: null,
   };
 }
 
 export async function saveDashboardRemote(
+  boardId: string,
   state: DashboardState,
   baseRev: number
 ): Promise<{ ok: boolean; rev: number | null; state: DashboardState | null; error: string | null }> {
   const { data, error } = await postDashboardApi<ApiResponse & { rev: number; state: DashboardState }>({
     action: 'save',
+    boardId,
     state,
     baseRev,
   });
@@ -253,17 +290,32 @@ export async function saveDashboardRemote(
 }
 
 export async function fetchCardHistoryRemote(
+  boardId: string,
   tab: TabId,
   cardId: string
 ): Promise<{ entries: CardHistoryEntry[]; error: string | null }> {
   const { data, error } = await postDashboardApi<ApiResponse & { entries: CardHistoryEntry[] }>({
     action: 'history',
+    boardId,
     tab,
     cardId,
   });
   if (error) return { entries: [], error };
   return { entries: data!.entries || [], error: null };
 }
+
+/** Сводный экран: выбранная вкладка по всем доступным инфоцентрам. */
+export async function fetchSummaryRemote(
+  tab: TabId
+): Promise<{ sections: SummarySection[]; error: string | null }> {
+  const { data, error } = await postDashboardApi<ApiResponse & { sections: SummarySection[] }>({
+    action: 'summary',
+    tab,
+  });
+  if (error) return { sections: [], error };
+  return { sections: data!.sections || [], error: null };
+}
+
 
 interface RawBxUser {
   ID: string;
@@ -297,7 +349,10 @@ export function fetchPortalUsers(): Promise<{ users: PortalUser[]; error: string
         resolve({ users: collected, error: bxErrorMessage(result) });
         return;
       }
-      const rows = (result.data() as RawBxUser[]) || [];
+      // Портал может ответить не массивом (например, объектом с ошибкой) —
+      // необработанное исключение здесь ломало бы выпадающий список сотрудников.
+      const raw = result.data();
+      const rows: RawBxUser[] = Array.isArray(raw) ? (raw as RawBxUser[]) : [];
       rows.forEach((u) => {
         collected.push({
           id: u.ID,

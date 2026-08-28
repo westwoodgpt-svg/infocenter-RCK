@@ -117,6 +117,44 @@ export type AnyCard =
 
 export type DashboardState = Record<TabId, AnyCard[]>;
 
+/** Инфоцентр отдела (или исторический общий инфоцентр РЦК). */
+export interface BoardInfo {
+  id: string;
+  title: string;
+  departmentId?: string | null;
+  canEdit: boolean;
+}
+
+export type UserRole = 'admin' | 'director' | 'head' | 'employee';
+
+/** Что сервер сообщает открывшему приложение: кто он и что ему доступно. */
+export interface BootstrapInfo {
+  me: { id: string; name: string; isAdmin: boolean };
+  role: UserRole;
+  boards: BoardInfo[];
+  defaultBoardId: string | null;
+  canSeeSummary: boolean;
+  legacyBoardId: string;
+  warning: string | null;
+}
+
+/** Один отдел на сводном экране. */
+export interface SummarySection {
+  boardId: string;
+  title: string;
+  canEdit: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  cards: AnyCard[];
+}
+
+export const ROLE_LABELS: Record<UserRole, string> = {
+  admin: 'Администратор портала',
+  director: 'Директор',
+  head: 'Руководитель',
+  employee: 'Сотрудник',
+};
+
 export const CARD_TYPE_LABELS: Record<CardType, string> = {
   kpi: 'KPI (план/факт/%)',
   chart: 'График',
