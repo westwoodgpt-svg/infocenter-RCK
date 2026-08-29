@@ -18,6 +18,8 @@ import { LEGACY_BOARD_ID } from './_access.js';
 const currentKey = (prefix) => `rck:board:${prefix}:current`;
 const snapshotKey = (prefix, rev) => `rck:board:${prefix}:snap:${rev}`;
 const cardHistoryKey = (prefix, tab, cardId) => `rck:card-history:${prefix}:${tab}:${cardId}`;
+// Личная настройка сводного экрана: у каждого руководителя своя.
+const summaryConfigKey = (userId) => `rck:summary-config:${userId}`;
 
 // Ключи до разделения по отделам — читаются как запасной вариант для РЦК.
 const LEGACY_CURRENT_KEY = 'rck:dashboard:current';
@@ -352,4 +354,46 @@ export async function cardHistory(prefix, tab, cardId) {
     }
   }
   return entries.reverse();
+}
+
+// ---------------------------------------------------------------------------
+// Настройка сводного экрана (какие отделы и какие карточки на нём показывать)
+// ---------------------------------------------------------------------------
+
+const SUMMARY_CONFIG_MAX_BOARDS = 100;
+const SUMMARY_CONFIG_MAX_CARDS = 300;
+
+/** Приводим присланную настройку к ожидаемому виду: клиенту доверять нельзя. */
+export function normalizeSummaryConfig(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const order = Array.isArray(src.order) ? src.order.filter((id) => typeof id === 'string').slice(0, SUMMARY_CONFIG_MAX_BOARDS) : [];
+  const boards = {};
+  const srcBoards = src.boards && typeof src.boards === 'object' ? src.boards : {};
+  for (const [boardId, pref] of Object.entries(srcBoards).slice(0, SUMMARY_CONFIG_MAX_BOARDS)) {
+    if (typeof boardId !== 'string' || !pref || typeof pref !== 'object') continue;
+    const entry = {};
+    if (pref.hidden) entry.hidden = true;
+    if (pref.cards && typeof pref.cards === 'object') {
+      const cards = {};
+      for (const tab of TABS) {
+        const list = pref.cards[tab];
+        if (!Array.isArray(list)) continue;
+        cards[tab] = list.filter((id) => typeof id === 'string').slice(0, SUMMARY_CONFIG_MAX_CARDS);
+      }
+      if (Object.keys(cards).length) entry.cards = cards;
+    }
+    boards[boardId] = entry;
+  }
+  return { version: 1, order, boards };
+}
+
+export async function loadSummaryConfig(userId) {
+  const stored = await readJson(summaryConfigKey(userId));
+  return stored ? normalizeSummaryConfig(stored) : null;
+}
+
+export async function saveSummaryConfig(userId, raw) {
+  const config = normalizeSummaryConfig(raw);
+  await redisClient().set(summaryConfigKey(userId), JSON.stringify(config));
+  return config;
 }

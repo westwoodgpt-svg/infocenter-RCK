@@ -1,15 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { ArrowRight, Building2, Loader2, RefreshCw } from 'lucide-react';
-import { SummarySection, TabId } from '../types';
+import { ArrowRight, Building2, Loader2, RefreshCw, SlidersHorizontal } from 'lucide-react';
+import { EMPTY_SUMMARY_CONFIG, SummaryConfig, SummarySection, TabId } from '../types';
 import CardShell from './cards/CardShell';
 import CardView from './cards/CardView';
 import { effectiveIndicator } from './cards/chartStatus';
+import SummaryEditor from './SummaryEditor';
+import { applySummaryConfig } from '../summaryConfig';
 
 interface Props {
   tab: TabId;
   tabLabel: string;
   loadSummary: (tab: TabId) => Promise<{ sections: SummarySection[]; error: string | null }>;
+  loadConfig: () => Promise<{ config: SummaryConfig; error: string | null }>;
+  saveConfig: (config: SummaryConfig) => Promise<{ error: string | null }>;
   onOpenBoard: (boardId: string) => void;
 }
 
@@ -21,11 +25,16 @@ function formatStamp(at: string | null): string {
 }
 
 // Сводный экран: выбранная вкладка по всем доступным инфоцентрам сразу.
-// Только просмотр — правки вносятся в инфоцентре своего отдела.
-export default function SummaryBoard({ tab, tabLabel, loadSummary, onOpenBoard }: Props) {
+// Только просмотр — правки вносятся в инфоцентре своего отдела. Что именно
+// попадает в сводку, руководитель настраивает сам (кнопка «Настроить»).
+export default function SummaryBoard({ tab, tabLabel, loadSummary, loadConfig, saveConfig, onOpenBoard }: Props) {
   const [sections, setSections] = useState<SummarySection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [config, setConfig] = useState<SummaryConfig>(EMPTY_SUMMARY_CONFIG);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,6 +49,29 @@ export default function SummaryBoard({ tab, tabLabel, loadSummary, onOpenBoard }
       cancelled = true;
     };
   }, [tab, loadSummary]);
+
+  // Настройка не зависит от вкладки — читаем её один раз на открытие сводки.
+  useEffect(() => {
+    let cancelled = false;
+    loadConfig().then(({ config: loaded }) => {
+      if (!cancelled) setConfig(loaded);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadConfig]);
+
+  const applyConfig = useCallback(
+    async (next: SummaryConfig) => {
+      setSaving(true);
+      setConfig(next); // показываем результат сразу, не дожидаясь портала
+      const { error: err } = await saveConfig(next);
+      setSaving(false);
+      setSaveError(err);
+      if (!err) setEditorOpen(false);
+    },
+    [saveConfig]
+  );
 
   if (loading) {
     return (
@@ -57,8 +89,11 @@ export default function SummaryBoard({ tab, tabLabel, loadSummary, onOpenBoard }
     );
   }
 
-  const filled = sections.filter((s) => s.cards.length > 0);
-  const empty = sections.filter((s) => s.cards.length === 0);
+  const shown = applySummaryConfig(sections, config, tab);
+  const filled = shown.filter((s) => s.cards.length > 0);
+  const empty = shown.filter((s) => s.cards.length === 0);
+  const hiddenCount = sections.length - shown.length;
+  const customized = hiddenCount > 0 || Object.keys(config.boards).length > 0 || config.order.length > 0;
 
   return (
     <div className="space-y-8">
@@ -67,11 +102,39 @@ export default function SummaryBoard({ tab, tabLabel, loadSummary, onOpenBoard }
           <Building2 className="w-4 h-4 text-indigo-400" /> Сводный экран · {tabLabel}
         </span>
         <span className="text-xs text-[#71717a]">
-          Отделов: <span className="text-white font-mono">{sections.length}</span> · с данными на этой вкладке:{' '}
-          <span className="text-white font-mono">{filled.length}</span>
+          Отделов: <span className="text-white font-mono">{shown.length}</span>
+          {hiddenCount > 0 && <span className="text-[#52525b]"> (скрыто {hiddenCount})</span>} · с данными на этой
+          вкладке: <span className="text-white font-mono">{filled.length}</span>
         </span>
-        <span className="text-xs text-[#52525b] ml-auto">Только просмотр — правки вносятся в инфоцентре отдела</span>
+        <span className="text-xs text-[#52525b]">Только просмотр — правки вносятся в инфоцентре отдела</span>
+        <button
+          onClick={() => {
+            setSaveError(null);
+            setEditorOpen((v) => !v);
+          }}
+          className={`ml-auto flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-colors ${
+            editorOpen || customized
+              ? 'bg-indigo-500/15 border-indigo-500/40 text-indigo-300'
+              : 'bg-zinc-800/60 border-zinc-700/60 text-zinc-300 hover:text-white'
+          }`}
+        >
+          <SlidersHorizontal className="w-3.5 h-3.5" />
+          {editorOpen ? 'Скрыть настройку' : 'Настроить сводку'}
+        </button>
       </div>
+
+      {editorOpen && (
+        <SummaryEditor
+          sections={sections}
+          tab={tab}
+          tabLabel={tabLabel}
+          config={config}
+          saving={saving}
+          error={saveError}
+          onApply={applyConfig}
+          onClose={() => setEditorOpen(false)}
+        />
+      )}
 
       {filled.map((section) => (
         <motion.section
@@ -113,7 +176,9 @@ export default function SummaryBoard({ tab, tabLabel, loadSummary, onOpenBoard }
 
       {filled.length === 0 && (
         <div className="elegant-card rounded-2xl p-12 text-center text-sm text-[#a1a1aa]">
-          На вкладке «{tabLabel}» пока нет карточек ни в одном отделе.
+          {customized
+            ? `На вкладке «${tabLabel}» нечего показать по текущей настройке сводки — проверьте её кнопкой «Настроить сводку».`
+            : `На вкладке «${tabLabel}» пока нет карточек ни в одном отделе.`}
         </div>
       )}
 

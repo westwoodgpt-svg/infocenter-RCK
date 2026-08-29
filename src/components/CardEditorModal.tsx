@@ -1,7 +1,7 @@
-import { useMemo, useState, ChangeEvent } from 'react';
+import { useState, ChangeEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Plus, Trash2, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Upload, ImagePlus } from 'lucide-react';
+import { X, Plus, Trash2, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Upload, ImagePlus, Palette } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { dataUrlSizeLabel, fileToDataUrl } from '../imageFile';
 import {
@@ -20,12 +20,15 @@ import {
   EventCard,
   EventsCard,
   TableCard,
+  TableCellColor,
+  TABLE_CELL_COLOR_LABELS,
   ImageCard,
 } from '../types';
 import { newCardId } from '../store';
 import { usePortalUsers } from '../usePortalUsers';
 import { isInIframe } from '../bitrix';
 import { colorFor } from './cards/palette';
+import { cellColorAt, cellColorClass, headerColorAt, swatchClass, TABLE_CELL_COLORS } from './cards/tableColors';
 
 interface CardEditorModalProps {
   open: boolean;
@@ -82,10 +85,17 @@ export default function CardEditorModal({ open, editingCard, onClose, onSave }: 
   const { users: portalUsers, loading: portalUsersLoading, error: portalUsersError } = usePortalUsers();
   const isPersonPicker = pickedType === 'person' && portalUsers.length > 0;
 
-  useMemo(() => {
+  // Сброс формы при открытии модалки на другой карточке. Раньше это делал
+  // useMemo — React вправе пересчитать его когда угодно, и тогда набранное в
+  // форме молча откатывалось к исходной карточке. Сравнение с сохранённым
+  // ключом сбрасывает форму ровно один раз на открытие.
+  const openKey = `${open ? 'open' : 'closed'}:${editingCard ? editingCard.id : 'new'}`;
+  const [syncedKey, setSyncedKey] = useState<string>(openKey);
+  if (syncedKey !== openKey) {
+    setSyncedKey(openKey);
     setPickedType(editingCard?.type ?? null);
     setDraft(editingCard);
-  }, [editingCard, open]);
+  }
 
   if (!open) return null;
 
@@ -328,49 +338,83 @@ function EventFields({ draft, setDraft }: { draft: EventCard; setDraft: (c: AnyC
 
 function EventsFields({ draft, setDraft }: { draft: EventsCard; setDraft: (c: AnyCard) => void }) {
   const update = (items: EventsCard['items']) => setDraft({ ...draft, items });
+  const patch = (i: number, fields: Partial<EventsCard['items'][number]>) => {
+    const next = [...draft.items];
+    next[i] = { ...next[i], ...fields };
+    update(next);
+  };
+
   return (
     <div>
       <label className={labelCls()}>События (несколько в одной карточке)</label>
-      <div className="space-y-2">
-        {draft.items.map((item, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <input
-              className={inputCls()}
-              value={item.title}
-              placeholder="Название события"
-              onChange={(e) => {
-                const next = [...draft.items];
-                next[i] = { ...next[i], title: e.target.value };
-                update(next);
-              }}
-            />
-            <input
-              type="date"
-              className={inputCls()}
-              value={item.date}
-              onChange={(e) => {
-                const next = [...draft.items];
-                next[i] = { ...next[i], date: e.target.value };
-                update(next);
-              }}
-            />
-            <button
-              onClick={() => update(draft.items.filter((_, idx) => idx !== i))}
-              className="p-2 text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors flex-shrink-0"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
-          </div>
-        ))}
+      <div className="space-y-2.5">
+        {draft.items.map((item, i) => {
+          const isElapsed = item.counterMode === 'elapsed';
+          return (
+            <div key={i} className="border border-[#27272a] rounded-xl p-2.5 space-y-2 bg-[#141417]">
+              <div className="flex items-center gap-2">
+                <input
+                  className={inputCls()}
+                  value={item.title}
+                  placeholder="Название события"
+                  onChange={(e) => patch(i, { title: e.target.value })}
+                />
+                <input
+                  type="date"
+                  className={inputCls()}
+                  value={item.date}
+                  onChange={(e) => patch(i, { date: e.target.value })}
+                />
+                <button
+                  onClick={() => update(draft.items.filter((_, idx) => idx !== i))}
+                  title="Удалить событие"
+                  className="p-2 text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors flex-shrink-0"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+              {/* Такой же переключатель счётчика, как в одиночной карточке «Событие»:
+                  обратный счёт нужен и здесь (например, «дней без штрафа» по каждому авто). */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => patch(i, { counterMode: 'countdown' })}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors ${
+                    !isElapsed
+                      ? 'bg-indigo-500/15 border-indigo-500/40 text-indigo-300'
+                      : 'bg-[#161619] border-[#27272a] text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  Отсчёт до даты
+                </button>
+                <button
+                  type="button"
+                  onClick={() => patch(i, { counterMode: 'elapsed' })}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors ${
+                    isElapsed
+                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                      : 'bg-[#161619] border-[#27272a] text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  Обратный счёт от даты
+                </button>
+                <span className="text-[11px] text-[#71717a]">
+                  {isElapsed ? 'покажет, сколько дней прошло (растёт каждый день)' : 'покажет, сколько дней осталось'}
+                </span>
+              </div>
+            </div>
+          );
+        })}
         <button
-          onClick={() => update([...draft.items, { title: '', date: '' }])}
+          onClick={() => update([...draft.items, { title: '', date: '', counterMode: 'countdown' }])}
           className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-semibold mt-1"
         >
           <Plus className="w-3.5 h-3.5" /> Добавить событие
         </button>
       </div>
       <p className="text-[11px] text-[#71717a] mt-2">
-        Карточка сама отсортирует события по дате и подпишет каждое «Завершено» / «Ближайшее» / «Планируется».
+        Карточка сама отсортирует события по дате, посчитает дни по каждому и подпишет «Завершено» / «Ближайшее» /
+        «Планируется», а события с обратным счётом — числом прошедших дней.
       </p>
     </div>
   );
@@ -794,6 +838,14 @@ function ChartFields({ draft, setDraft }: { draft: ChartCard; setDraft: (c: AnyC
 
 function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyCard) => void }) {
   const [importError, setImportError] = useState<string | null>(null);
+  // Открытая палитра: 'h' — ячейка заголовка, число — индекс строки тела.
+  const [picker, setPicker] = useState<{ row: number | 'h'; col: number } | null>(null);
+
+  // Цвета живут в отдельной сетке, выровненной по строкам/столбцам таблицы.
+  // Приводим её к текущему размеру при каждой правке структуры, иначе после
+  // удаления строки или столбца заливка «съезжает» на соседние ячейки.
+  const fitColors = (rows: string[][], headers: string[], colors?: TableCellColor[][]): TableCellColor[][] =>
+    rows.map((_, ri) => headers.map((__, ci) => colors?.[ri]?.[ci] || 'none'));
 
   const handleFile = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -814,7 +866,8 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
         const [headerRow, ...bodyRows] = nonEmpty;
         const headers = headerRow.map((h) => String(h ?? ''));
         const rows = bodyRows.map((r) => headers.map((_, i) => String(r[i] ?? '')));
-        setDraft({ ...draft, headers, rows });
+        // Данные заменились целиком — старая раскраска к ним уже не относится.
+        setDraft({ ...draft, headers, rows, cellColors: undefined, headerColors: undefined });
         setImportError(null);
       } catch {
         setImportError('Не удалось прочитать файл. Поддерживаются .xlsx, .xls, .csv с заголовками в первой строке.');
@@ -834,14 +887,31 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
   const addColumn = () => {
     const headers = [...draft.headers, `Колонка ${draft.headers.length + 1}`];
     const rows = draft.rows.map((r) => [...r, '']);
-    setDraft({ ...draft, headers, rows });
+    setDraft({
+      ...draft,
+      headers,
+      rows,
+      cellColors: draft.cellColors ? fitColors(rows, headers, draft.cellColors) : undefined,
+      headerColors: draft.headerColors ? [...draft.headerColors, 'none'] : undefined,
+    });
   };
 
   const removeColumn = (idx: number) => {
     if (draft.headers.length <= 1) return;
     const headers = draft.headers.filter((_, i) => i !== idx);
     const rows = draft.rows.map((r) => r.filter((_, i) => i !== idx));
-    setDraft({ ...draft, headers, rows });
+    setDraft({
+      ...draft,
+      headers,
+      rows,
+      // Сначала дотягиваем сетку цветов до текущего размера, потом убираем из
+      // неё тот же столбец — так заливка остаётся на своих ячейках.
+      cellColors: draft.cellColors
+        ? fitColors(draft.rows, draft.headers, draft.cellColors).map((r) => r.filter((_, i) => i !== idx))
+        : undefined,
+      headerColors: draft.headerColors ? draft.headerColors.filter((_, i) => i !== idx) : undefined,
+    });
+    setPicker(null);
   };
 
   const setCell = (rowIdx: number, colIdx: number, value: string) => {
@@ -854,13 +924,118 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
     setDraft({ ...draft, rows });
   };
 
+  // Сетка цветов создаётся только когда что-то действительно закрасили — пока
+  // заливки нет, в данных карточки не появляется лишних массивов.
+  const setCellColor = (rowIdx: number | 'h', colIdx: number, color: TableCellColor) => {
+    if (rowIdx === 'h') {
+      const headerColors = draft.headers.map((_, i) => (i === colIdx ? color : draft.headerColors?.[i] || 'none'));
+      setDraft({ ...draft, headerColors });
+      return;
+    }
+    const cellColors = fitColors(draft.rows, draft.headers, draft.cellColors);
+    cellColors[rowIdx][colIdx] = color;
+    setDraft({ ...draft, cellColors });
+  };
+
+  /** Залить всю строку или весь столбец одним цветом — быстрее, чем по ячейке. */
+  const fillRow = (rowIdx: number, color: TableCellColor) => {
+    const cellColors = fitColors(draft.rows, draft.headers, draft.cellColors);
+    cellColors[rowIdx] = cellColors[rowIdx].map(() => color);
+    setDraft({ ...draft, cellColors });
+  };
+
+  const fillColumn = (colIdx: number, color: TableCellColor) => {
+    const cellColors = fitColors(draft.rows, draft.headers, draft.cellColors).map((r) =>
+      r.map((c, ci) => (ci === colIdx ? color : c))
+    );
+    const headerColors = draft.headers.map((_, i) => (i === colIdx ? color : draft.headerColors?.[i] || 'none'));
+    setDraft({ ...draft, cellColors, headerColors });
+  };
+
   const addRow = () => {
-    setDraft({ ...draft, rows: [...draft.rows, draft.headers.map(() => '')] });
+    const rows = [...draft.rows, draft.headers.map(() => '')];
+    setDraft({ ...draft, rows, cellColors: draft.cellColors ? fitColors(rows, draft.headers, draft.cellColors) : undefined });
+    setPicker(null);
   };
 
   const removeRow = (idx: number) => {
-    setDraft({ ...draft, rows: draft.rows.filter((_, i) => i !== idx) });
+    const rows = draft.rows.filter((_, i) => i !== idx);
+    setDraft({
+      ...draft,
+      rows,
+      cellColors: draft.cellColors ? draft.cellColors.filter((_, i) => i !== idx) : undefined,
+    });
+    setPicker(null);
   };
+
+  const clearColors = () => setDraft({ ...draft, cellColors: undefined, headerColors: undefined });
+
+  const hasColors =
+    (draft.cellColors || []).some((r) => (r || []).some((c) => c && c !== 'none')) ||
+    (draft.headerColors || []).some((c) => c && c !== 'none');
+
+  const pickerColor = (): TableCellColor =>
+    picker ? (picker.row === 'h' ? headerColorAt(draft, picker.col) : cellColorAt(draft, picker.row, picker.col)) : 'none';
+
+  const pickerLabel = () =>
+    picker ? (picker.row === 'h' ? `заголовок «${draft.headers[picker.col] || picker.col + 1}»` : `строка ${picker.row + 1}, столбец ${picker.col + 1}`) : '';
+
+  // Палитра живёт под таблицей, а не всплывающим окном у ячейки: таблица
+  // прокручивается по горизонтали, и всплывающее окно обрезалось её краем.
+  const palette = () => {
+    if (!picker) return null;
+    const current = pickerColor();
+    return (
+      <div className="mt-2 p-3 rounded-xl bg-[#131316] border border-indigo-500/30 space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-semibold text-[#a1a1aa]">Заливка: {pickerLabel()}</span>
+          <button
+            type="button"
+            onClick={() => setPicker(null)}
+            className="ml-auto text-[11px] text-zinc-400 hover:text-white transition-colors"
+          >
+            Готово
+          </button>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {TABLE_CELL_COLORS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              title={TABLE_CELL_COLOR_LABELS[c]}
+              onClick={() => setCellColor(picker.row, picker.col, c)}
+              className={`w-6 h-6 rounded-md border transition-transform ${swatchClass(c)} ${
+                current === c ? 'ring-2 ring-indigo-400 ring-offset-2 ring-offset-[#131316]' : 'hover:scale-110'
+              }`}
+            />
+          ))}
+          <span className="text-[11px] text-[#71717a] ml-1">{TABLE_CELL_COLOR_LABELS[current]}</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-[#71717a]">
+          <span>залить этим цветом:</span>
+          {picker.row !== 'h' && (
+            <button
+              type="button"
+              onClick={() => fillRow(picker.row as number, current)}
+              className="px-2 py-1 rounded-lg border border-[#27272a] hover:text-white transition-colors"
+            >
+              всю строку
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => fillColumn(picker.col, current)}
+            className="px-2 py-1 rounded-lg border border-[#27272a] hover:text-white transition-colors"
+          >
+            весь столбец
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const togglePicker = (row: number | 'h', col: number) =>
+    setPicker((p) => (p && p.row === row && p.col === col ? null : { row, col }));
 
   return (
     <div className="space-y-3">
@@ -875,21 +1050,45 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
       </div>
 
       <div>
-        <label className={labelCls()}>Данные</label>
+        <div className="flex items-center justify-between gap-3">
+          <label className={labelCls()}>Данные</label>
+          {hasColors && (
+            <button
+              type="button"
+              onClick={clearColors}
+              className="text-[11px] text-zinc-400 hover:text-white transition-colors mb-1"
+            >
+              Убрать всю заливку
+            </button>
+          )}
+        </div>
         <div className="overflow-x-auto border border-[#27272a] rounded-xl">
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-[#27272a] bg-[#161619]">
                 {draft.headers.map((h, ci) => (
-                  <th key={ci} className="p-2 min-w-[110px]">
+                  <th key={ci} className={`p-2 min-w-[130px] ${cellColorClass(headerColorAt(draft, ci))}`}>
                     <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        title="Цвет ячейки"
+                        onClick={() => togglePicker('h', ci)}
+                        className={`w-4 h-4 rounded border flex-shrink-0 ${swatchClass(headerColorAt(draft, ci))} ${
+                          picker && picker.row === 'h' && picker.col === ci ? 'ring-2 ring-indigo-400' : ''
+                        }`}
+                      />
                       <input
                         className="w-full bg-transparent border-b border-[#27272a] text-zinc-200 font-semibold px-1 py-0.5 focus:outline-none focus:border-indigo-500"
                         value={h}
                         onChange={(e) => setHeader(ci, e.target.value)}
                       />
                       {draft.headers.length > 1 && (
-                        <button onClick={() => removeColumn(ci)} className="text-zinc-600 hover:text-rose-400 flex-shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => removeColumn(ci)}
+                          title="Удалить столбец"
+                          className="text-zinc-600 hover:text-rose-400 flex-shrink-0"
+                        >
                           <X className="w-3 h-3" />
                         </button>
                       )}
@@ -903,16 +1102,26 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
               {draft.rows.map((row, ri) => (
                 <tr key={ri} className="border-b border-[#1f1f23] last:border-b-0">
                   {draft.headers.map((_, ci) => (
-                    <td key={ci} className="p-2">
-                      <input
-                        className="w-full bg-transparent text-zinc-200 px-1 py-0.5 focus:outline-none"
-                        value={row[ci] ?? ''}
-                        onChange={(e) => setCell(ri, ci, e.target.value)}
-                      />
+                    <td key={ci} className={`p-2 ${cellColorClass(cellColorAt(draft, ri, ci))}`}>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          title="Цвет ячейки"
+                          onClick={() => togglePicker(ri, ci)}
+                          className={`w-4 h-4 rounded border flex-shrink-0 ${swatchClass(cellColorAt(draft, ri, ci))} ${
+                            picker && picker.row === ri && picker.col === ci ? 'ring-2 ring-indigo-400' : ''
+                          }`}
+                        />
+                        <input
+                          className="w-full bg-transparent text-zinc-200 px-1 py-0.5 focus:outline-none"
+                          value={row[ci] ?? ''}
+                          onChange={(e) => setCell(ri, ci, e.target.value)}
+                        />
+                      </div>
                     </td>
                   ))}
                   <td className="p-2">
-                    <button onClick={() => removeRow(ri)} className="text-zinc-600 hover:text-rose-400">
+                    <button type="button" onClick={() => removeRow(ri)} title="Удалить строку" className="text-zinc-600 hover:text-rose-400">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </td>
@@ -921,13 +1130,17 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
             </tbody>
           </table>
         </div>
-        <div className="flex gap-4 mt-2">
+        {palette()}
+        <div className="flex flex-wrap gap-4 mt-2">
           <button onClick={addRow} className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-semibold">
             <Plus className="w-3.5 h-3.5" /> Добавить строку
           </button>
           <button onClick={addColumn} className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-semibold">
             <Plus className="w-3.5 h-3.5" /> Добавить столбец
           </button>
+          <span className="flex items-center gap-1.5 text-[11px] text-[#71717a]">
+            <Palette className="w-3.5 h-3.5" /> Квадрат слева от значения — выбор заливки ячейки
+          </span>
         </div>
       </div>
     </div>

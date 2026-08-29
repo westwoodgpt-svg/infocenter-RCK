@@ -1,4 +1,4 @@
-import { AnyCard, BootstrapInfo, DashboardState, SummarySection, TabId } from './types';
+import { AnyCard, BootstrapInfo, DashboardState, SummaryConfig, SummarySection, TabId } from './types';
 
 // Общее хранилище дашборда на уровне приложения Битрикс24 (app.option) —
 // один и тот же ключ виден всем пользователям портала, установившим
@@ -314,6 +314,26 @@ export async function fetchSummaryRemote(
   });
   if (error) return { sections: [], error };
   return { sections: data!.sections || [], error: null };
+}
+
+/** Личная настройка сводного экрана: какие отделы и какие карточки на него тянуть. */
+export async function fetchSummaryConfigRemote(): Promise<{ config: SummaryConfig | null; error: string | null }> {
+  const { data, error } = await postDashboardApi<ApiResponse & { config: SummaryConfig | null }>({
+    action: 'summary-config',
+  });
+  if (error) return { config: null, error };
+  return { config: data!.config || null, error: null };
+}
+
+export async function saveSummaryConfigRemote(
+  config: SummaryConfig
+): Promise<{ config: SummaryConfig | null; error: string | null }> {
+  const { data, error } = await postDashboardApi<ApiResponse & { config: SummaryConfig }>({
+    action: 'summary-config-save',
+    config,
+  });
+  if (error) return { config: null, error };
+  return { config: data!.config, error: null };
 }
 
 

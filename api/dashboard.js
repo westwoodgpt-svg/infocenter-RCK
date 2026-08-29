@@ -4,7 +4,14 @@
 // что он может в них делать, решает сервер по данным Битрикс24 (api/_access.js);
 // идентификатор инфоцентра из запроса всегда проверяется по этому списку.
 import { boardAccess, resolveAccess, resolveIdentity, storagePrefixFor } from './_access.js';
-import { loadDashboard, saveDashboard, cardHistory, TABS } from './_store.js';
+import {
+  loadDashboard,
+  saveDashboard,
+  cardHistory,
+  loadSummaryConfig,
+  saveSummaryConfig,
+  TABS,
+} from './_store.js';
 
 // Сводный экран грузит несколько инфоцентров сразу, поэтому тяжёлые картинки в
 // нём не передаются — вместо них карточка помечается флагом.
@@ -125,6 +132,28 @@ export default async function handler(req, res) {
       }
       const entries = await cardHistory(storagePrefixFor(board.id), tab, String(cardId));
       res.status(200).json({ ok: true, entries });
+      return;
+    }
+
+    // Настройка сводного экрана (что и откуда на него тянуть) — личная,
+    // поэтому лежит под идентификатором сотрудника, а не инфоцентра.
+    if (action === 'summary-config') {
+      if (!access.canSeeSummary) {
+        res.status(403).json({ ok: false, error: 'сводный экран доступен при нескольких инфоцентрах' });
+        return;
+      }
+      const config = await loadSummaryConfig(identity.id);
+      res.status(200).json({ ok: true, config });
+      return;
+    }
+
+    if (action === 'summary-config-save') {
+      if (!access.canSeeSummary) {
+        res.status(403).json({ ok: false, error: 'сводный экран доступен при нескольких инфоцентрах' });
+        return;
+      }
+      const config = await saveSummaryConfig(identity.id, payload.config);
+      res.status(200).json({ ok: true, config });
       return;
     }
 
