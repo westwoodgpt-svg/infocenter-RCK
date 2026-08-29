@@ -1,16 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AnyCard, BoardInfo, BootstrapInfo, DashboardState, SummarySection, TabId, UserRole } from './types';
+import {
+  AnyCard,
+  BoardInfo,
+  BootstrapInfo,
+  DashboardState,
+  EMPTY_SUMMARY_CONFIG,
+  SummaryConfig,
+  SummarySection,
+  TabId,
+  UserRole,
+} from './types';
 import { SEED_DATA, EMPTY_DASHBOARD } from './seedData';
 import {
   bootstrapRemote,
   bx24Init,
   CardHistoryEntry,
   fetchCardHistoryRemote,
+  fetchSummaryConfigRemote,
   fetchSummaryRemote,
   isInIframe,
   LEGACY_BOARD_ID,
   loadDashboardRemote,
   saveDashboardRemote,
+  saveSummaryConfigRemote,
 } from './bitrix';
 import { readLocalCardHistory, recordLocalHistory } from './history';
 
@@ -20,6 +32,29 @@ const CACHE_PREFIX = 'rck-dashboard-v2:';
 // живут исторические данные РЦК.
 const LEGACY_CACHE_KEY = 'rck-dashboard-v1';
 const ACTIVE_BOARD_KEY = 'rck-active-board';
+// Настройка сводного экрана хранится на портале (она личная и должна ездить за
+// руководителем), а в браузере остаётся копия — на случай недоступности сервера.
+const SUMMARY_CONFIG_KEY = 'rck-summary-config';
+
+function readLocalSummaryConfig(): SummaryConfig | null {
+  try {
+    const raw = localStorage.getItem(SUMMARY_CONFIG_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as SummaryConfig;
+    if (!parsed || typeof parsed !== 'object' || !parsed.boards) return null;
+    return { version: 1, order: Array.isArray(parsed.order) ? parsed.order : [], boards: parsed.boards };
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalSummaryConfig(config: SummaryConfig) {
+  try {
+    localStorage.setItem(SUMMARY_CONFIG_KEY, JSON.stringify(config));
+  } catch {
+    // хранилище недоступно — настройка останется только на портале
+  }
+}
 
 /** Псевдо-инфоцентр для работы вне Битрикс24 (данные только в этом браузере). */
 export const LOCAL_BOARD_ID = 'local';
@@ -580,6 +615,24 @@ export function useDashboardStore() {
     []
   );
 
+  // Личная настройка сводного экрана: что и откуда на него тянуть.
+  const loadSummaryConfig = useCallback(async (): Promise<{ config: SummaryConfig; error: string | null }> => {
+    const cached = readLocalSummaryConfig();
+    if (modeRef.current !== 'bitrix') return { config: cached || EMPTY_SUMMARY_CONFIG, error: null };
+    const { config, error } = await fetchSummaryConfigRemote();
+    if (error) return { config: cached || EMPTY_SUMMARY_CONFIG, error };
+    const next = config || cached || EMPTY_SUMMARY_CONFIG;
+    writeLocalSummaryConfig(next);
+    return { config: next, error: null };
+  }, []);
+
+  const saveSummaryConfig = useCallback(async (config: SummaryConfig): Promise<{ error: string | null }> => {
+    writeLocalSummaryConfig(config);
+    if (modeRef.current !== 'bitrix') return { error: null };
+    const { error } = await saveSummaryConfigRemote(config);
+    return { error };
+  }, []);
+
   const loadSummary = useCallback(
     async (tab: TabId): Promise<{ sections: SummarySection[]; error: string | null }> => {
       if (modeRef.current !== 'bitrix') return { sections: [], error: 'сводный экран доступен только внутри Битрикс24' };
@@ -608,6 +661,8 @@ export function useDashboardStore() {
     legacyBoardId,
     switchBoard,
     loadSummary,
+    loadSummaryConfig,
+    saveSummaryConfig,
     refresh,
     addCard,
     updateCard,

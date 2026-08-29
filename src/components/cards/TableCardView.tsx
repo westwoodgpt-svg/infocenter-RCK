@@ -1,5 +1,6 @@
 import { Table2 } from 'lucide-react';
 import { TableCard } from '../../types';
+import { cellColorAt, cellColorClass, headerColorAt } from './tableColors';
 
 export default function TableCardView({ card }: { card: TableCard }) {
   const hasData = card.headers.length > 0;
@@ -23,7 +24,12 @@ export default function TableCardView({ card }: { card: TableCard }) {
             <thead>
               <tr className="border-b border-[#27272a] bg-[#161619]">
                 {card.headers.map((h, i) => (
-                  <th key={i} className="text-left p-2.5 font-semibold text-zinc-300 whitespace-nowrap">
+                  <th
+                    key={i}
+                    className={`text-left p-2.5 font-semibold whitespace-nowrap ${
+                      cellColorClass(headerColorAt(card, i)) || 'text-zinc-300'
+                    }`}
+                  >
                     {h}
                   </th>
                 ))}
@@ -32,11 +38,14 @@ export default function TableCardView({ card }: { card: TableCard }) {
             <tbody>
               {card.rows.map((row, ri) => (
                 <tr key={ri} className="border-b border-[#1f1f23] last:border-b-0 hover:bg-[#161619]/60 transition-colors">
-                  {card.headers.map((_, ci) => (
-                    <td key={ci} className="p-2.5 text-zinc-300 whitespace-nowrap">
-                      {row[ci] ?? ''}
-                    </td>
-                  ))}
+                  {card.headers.map((_, ci) => {
+                    const fill = cellColorClass(cellColorAt(card, ri, ci));
+                    return (
+                      <td key={ci} className={`p-2.5 whitespace-nowrap ${fill || 'text-zinc-300'}`}>
+                        {row[ci] ?? ''}
+                      </td>
+                    );
+                  })}
                 </tr>
               ))}
             </tbody>

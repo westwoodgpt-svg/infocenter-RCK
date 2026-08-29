@@ -86,6 +86,10 @@ export interface EventCard extends BaseCard {
 export interface EventListItem {
   title: string;
   date: string; // "YYYY-MM-DD"
+  /** Как считать дни по этому событию — так же, как в одиночной карточке «Событие»:
+   *  "countdown" (по умолчанию) — сколько дней осталось до даты,
+   *  "elapsed" — обратный счёт: сколько дней прошло от даты («дней без штрафа»). */
+  counterMode?: EventCounterMode;
 }
 
 export interface EventsCard extends BaseCard {
@@ -93,10 +97,18 @@ export interface EventsCard extends BaseCard {
   items: EventListItem[];
 }
 
+/** Заливка ячейки таблицы. "none" (или отсутствие значения) — без заливки. */
+export type TableCellColor = 'none' | 'emerald' | 'amber' | 'rose' | 'sky' | 'violet' | 'slate';
+
 export interface TableCard extends BaseCard {
   type: 'table';
   headers: string[];
   rows: string[][];
+  /** Цвет ячеек тела таблицы, выровнен по rows: cellColors[строка][столбец].
+   *  Отсутствующие элементы = без заливки. */
+  cellColors?: TableCellColor[][];
+  /** Цвет ячеек строки заголовков, выровнен по headers. */
+  headerColors?: TableCellColor[];
 }
 
 export interface ImageCard extends BaseCard {
@@ -126,6 +138,25 @@ export interface BoardInfo {
 }
 
 export type UserRole = 'admin' | 'director' | 'head' | 'employee';
+
+/** Настройка одного отдела на сводном экране. */
+export interface SummaryBoardPref {
+  /** Отдел скрыт со сводного экрана целиком. */
+  hidden?: boolean;
+  /** Явно выбранные карточки по вкладкам. Вкладки нет в объекте = берём все карточки вкладки. */
+  cards?: Partial<Record<TabId, string[]>>;
+}
+
+/** Что и откуда тянуть на сводный экран. Настройка личная: каждый руководитель
+ *  собирает свой сводный экран, не меняя его коллегам. */
+export interface SummaryConfig {
+  version: 1;
+  /** Порядок отделов (id инфоцентров). Отделы вне списка показываются после него. */
+  order: string[];
+  boards: Record<string, SummaryBoardPref>;
+}
+
+export const EMPTY_SUMMARY_CONFIG: SummaryConfig = { version: 1, order: [], boards: {} };
 
 /** Что сервер сообщает открывшему приложение: кто он и что ему доступно. */
 export interface BootstrapInfo {
@@ -165,6 +196,16 @@ export const CARD_TYPE_LABELS: Record<CardType, string> = {
   events: 'Список событий (несколько в одной карточке)',
   table: 'Таблица (xlsx/csv)',
   image: 'Изображение',
+};
+
+export const TABLE_CELL_COLOR_LABELS: Record<TableCellColor, string> = {
+  none: 'Без заливки',
+  emerald: 'Зелёная',
+  amber: 'Жёлтая',
+  rose: 'Красная',
+  sky: 'Синяя',
+  violet: 'Фиолетовая',
+  slate: 'Серая',
 };
 
 export const INDICATOR_COLOR_LABELS: Record<IndicatorColor, string> = {
