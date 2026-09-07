@@ -29,6 +29,7 @@ import { usePortalUsers } from '../usePortalUsers';
 import { isInIframe } from '../bitrix';
 import { colorFor } from './cards/palette';
 import { cellColorAt, cellColorClass, headerColorAt, swatchClass, TABLE_CELL_COLORS } from './cards/tableColors';
+import LevelIcon, { iconColumnAt, parseLevel } from './cards/LevelIcon';
 import {
   clampColumnWidth,
   columnWidthAt,
@@ -875,6 +876,10 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
   const fitColors = (rows: string[][], headers: string[], colors?: TableCellColor[][]): TableCellColor[][] =>
     rows.map((_, ri) => headers.map((__, ci) => colors?.[ri]?.[ci] || 'none'));
 
+  /** Массив флагов или undefined, если все выключены — в карточке не должно
+   *  оставаться пустых массивов. */
+  const keepFlags = (flags: boolean[]): boolean[] | undefined => (flags.some(Boolean) ? flags : undefined);
+
   // Файл не подставляется в карточку сразу: в книге бывает несколько листов,
   // а над таблицей — шапка отчёта, поэтому сначала показываем разбор и даём
   // выбрать лист и строку заголовков.
@@ -949,6 +954,7 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
         ? body.map((_, ri) => headers.map((__, ci) => sheet.colors[importDraft.headerRow + 1 + ri]?.[ci] || 'none'))
         : undefined,
       columnWidths: undefined,
+      iconColumns: undefined,
     });
     setImportDraft(null);
     setPicker(null);
@@ -970,6 +976,7 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
       cellColors: draft.cellColors ? fitColors(rows, headers, draft.cellColors) : undefined,
       headerColors: draft.headerColors ? [...draft.headerColors, 'none'] : undefined,
       columnWidths: draft.columnWidths ? [...fitColumnWidths(draft.headers, draft.columnWidths), null] : undefined,
+      iconColumns: draft.iconColumns ? [...draft.headers.map((_, i) => Boolean(draft.iconColumns?.[i])), false] : undefined,
     });
   };
 
@@ -989,6 +996,9 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
       headerColors: draft.headerColors ? draft.headerColors.filter((_, i) => i !== idx) : undefined,
       columnWidths: draft.columnWidths
         ? normalizeColumnWidths(fitColumnWidths(draft.headers, draft.columnWidths).filter((_, i) => i !== idx))
+        : undefined,
+      iconColumns: draft.iconColumns
+        ? keepFlags(draft.headers.map((_, i) => Boolean(draft.iconColumns?.[i])).filter((_, i) => i !== idx))
         : undefined,
     });
     setPicker(null);
@@ -1059,6 +1069,33 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
   };
 
   const clearColumnWidths = () => setDraft({ ...draft, columnWidths: undefined });
+
+  // Значки-«пироги» вместо чисел 0–4 — для матриц компетенций. Включаются по
+  // столбцу: в той же таблице обычно есть и обычные числовые столбцы
+  // (номер по порядку, количество), их превращать в значки нельзя.
+  const setIconColumn = (idx: number, on: boolean) => {
+    const flags = draft.headers.map((_, i) => (i === idx ? on : iconColumnAt(draft, i)));
+    setDraft({ ...draft, iconColumns: keepFlags(flags) });
+  };
+
+  // Столбец уровней: почти все заполненные ячейки — числа 0–4. Не «все»,
+  // потому что в матрицах над списком сотрудников стоят сводные строки
+  // («минимальное», «фактическое») с обычными количествами. Такие значения
+  // останутся числами: значок рисуется только для 0–4.
+  const columnLooksLikeLevels = (ci: number) => {
+    const values = draft.rows.map((r) => String(r[ci] ?? '').trim()).filter((v) => v !== '');
+    const levels = values.filter((v) => parseLevel(v) !== null).length;
+    return levels >= 5 && levels / values.length >= 0.6;
+  };
+
+  const autoIconColumns = () => {
+    setDraft({ ...draft, iconColumns: keepFlags(draft.headers.map((_, i) => columnLooksLikeLevels(i))) });
+  };
+
+  const clearIconColumns = () => setDraft({ ...draft, iconColumns: undefined });
+
+  const iconColumnsOn = draft.headers.some((_, i) => iconColumnAt(draft, i));
+  const iconCandidates = draft.headers.filter((_, i) => columnLooksLikeLevels(i)).length;
 
   /** Тянем правую границу заголовка — как в таблице Excel. */
   const startColumnDrag = (idx: number, clientX: number) => {
@@ -1334,6 +1371,17 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
         <div className="flex items-center justify-between gap-3">
           <label className={labelCls()}>Данные</label>
           <div className="flex items-center gap-3 mb-1">
+            {(iconCandidates > 0 || iconColumnsOn) && (
+              <button
+                type="button"
+                onClick={iconColumnsOn ? clearIconColumns : autoIconColumns}
+                title="Числа 0–4 показывать значками освоения — как в матрице компетенций"
+                className="flex items-center gap-1 text-[11px] text-zinc-400 hover:text-white transition-colors"
+              >
+                <LevelIcon level={2} size={12} />
+                {iconColumnsOn ? 'Убрать значки 0–4' : `Значки 0–4 (${iconCandidates} стлб.)`}
+              </button>
+            )}
             {fixedWidths && (
               <button
                 type="button"
@@ -1420,6 +1468,22 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
                         className="w-14 bg-[#0f0f11] border border-[#27272a] rounded px-1 py-0.5 text-zinc-300 text-[10px] focus:outline-none focus:border-indigo-500"
                       />
                       <span>px</span>
+                      <button
+                        type="button"
+                        onClick={() => setIconColumn(ci, !iconColumnAt(draft, ci))}
+                        title={
+                          iconColumnAt(draft, ci)
+                            ? 'Показывать числа этого столбца как есть'
+                            : 'Показывать числа 0–4 этого столбца значками освоения'
+                        }
+                        className={`ml-auto p-0.5 rounded transition-colors ${
+                          iconColumnAt(draft, ci)
+                            ? 'text-indigo-300 bg-indigo-500/20'
+                            : 'text-[#3f3f46] hover:text-zinc-300'
+                        }`}
+                      >
+                        <LevelIcon level={2} size={12} />
+                      </button>
                     </div>
 
                     <span
@@ -1462,6 +1526,10 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
                           value={row[ci] ?? ''}
                           onChange={(e) => setCell(ri, ci, e.target.value)}
                         />
+                        {/* Как ячейка будет выглядеть в карточке. */}
+                        {iconColumnAt(draft, ci) && parseLevel(String(row[ci] ?? '')) !== null && (
+                          <LevelIcon level={parseLevel(String(row[ci] ?? ''))!} size={14} />
+                        )}
                       </div>
                     </td>
                   ))}

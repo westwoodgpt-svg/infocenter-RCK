@@ -2,6 +2,7 @@ import { Table2 } from 'lucide-react';
 import { TableCard } from '../../types';
 import { cellColorAt, cellColorClass, headerColorAt } from './tableColors';
 import { columnWidthAt, hasColumnWidths, tableMinWidth } from './tableWidths';
+import LevelIcon, { iconColumnAt, parseLevel } from './LevelIcon';
 
 export default function TableCardView({ card }: { card: TableCard }) {
   const hasData = card.headers.length > 0;
@@ -55,11 +56,15 @@ export default function TableCardView({ card }: { card: TableCard }) {
                 <tr key={ri} className="border-b border-[#1f1f23] last:border-b-0 hover:bg-[#161619]/60 transition-colors">
                   {card.headers.map((_, ci) => {
                     const fill = cellColorClass(cellColorAt(card, ri, ci));
+                    const value = row[ci] ?? '';
+                    // Столбец уровней: 0–4 показываем значком, всё остальное
+                    // (текст, числа крупнее четырёх) остаётся как есть.
+                    const level = iconColumnAt(card, ci) ? parseLevel(value) : null;
                     return (
                       // Длинный текст переносится по словам, а не растягивает
                       // таблицу в бесконечную горизонтальную прокрутку.
                       <td key={ci} className={`p-2.5 align-top whitespace-pre-wrap break-words ${fill || 'text-zinc-300'}`}>
-                        {row[ci] ?? ''}
+                        {level === null ? value : <LevelIcon level={level} />}
                       </td>
                     );
                   })}
