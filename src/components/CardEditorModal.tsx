@@ -1,8 +1,7 @@
-import { useState, ChangeEvent } from 'react';
+import { useEffect, useRef, useState, ChangeEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Plus, Trash2, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Upload, ImagePlus, Palette } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import { X, Plus, Trash2, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Upload, ImagePlus, Palette, MoveHorizontal } from 'lucide-react';
 import { dataUrlSizeLabel, fileToDataUrl } from '../imageFile';
 import {
   AnyCard,
@@ -25,10 +24,21 @@ import {
   ImageCard,
 } from '../types';
 import { newCardId } from '../store';
+import { ImportedSheet, parseTableFile } from '../tableImport';
 import { usePortalUsers } from '../usePortalUsers';
 import { isInIframe } from '../bitrix';
 import { colorFor } from './cards/palette';
 import { cellColorAt, cellColorClass, headerColorAt, swatchClass, TABLE_CELL_COLORS } from './cards/tableColors';
+import {
+  clampColumnWidth,
+  columnWidthAt,
+  fitColumnWidths,
+  hasColumnWidths,
+  MAX_COLUMN_WIDTH,
+  MIN_COLUMN_WIDTH,
+  normalizeColumnWidths,
+  tableMinWidth,
+} from './cards/tableWidths';
 
 interface CardEditorModalProps {
   open: boolean;
@@ -836,10 +846,28 @@ function ChartFields({ draft, setDraft }: { draft: ChartCard; setDraft: (c: AnyC
   );
 }
 
+/** Файл выбран и разобран: сотрудник уточняет лист и строку заголовков. */
+interface ImportDraft {
+  fileName: string;
+  data: ArrayBuffer | string;
+  isCsv: boolean;
+  sheets: ImportedSheet[];
+  sheetIndex: number;
+  headerRow: number;
+  fillMerged: boolean;
+  keepColors: boolean;
+}
+
 function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyCard) => void }) {
   const [importError, setImportError] = useState<string | null>(null);
+  const [importDraft, setImportDraft] = useState<ImportDraft | null>(null);
   // Открытая палитра: 'h' — ячейка заголовка, число — индекс строки тела.
   const [picker, setPicker] = useState<{ row: number | 'h'; col: number } | null>(null);
+  // Столбец, ширину которого сейчас тянут мышью за правую границу заголовка.
+  const [dragCol, setDragCol] = useState<number | null>(null);
+  const dragRef = useRef<{ col: number; startX: number; startWidth: number } | null>(null);
+  const headerRefs = useRef<(HTMLTableCellElement | null)[]>([]);
+  const fixedWidths = hasColumnWidths(draft);
 
   // Цвета живут в отдельной сетке, выровненной по строкам/столбцам таблицы.
   // Приводим её к текущему размеру при каждой правке структуры, иначе после
@@ -847,6 +875,9 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
   const fitColors = (rows: string[][], headers: string[], colors?: TableCellColor[][]): TableCellColor[][] =>
     rows.map((_, ri) => headers.map((__, ci) => colors?.[ri]?.[ci] || 'none'));
 
+  // Файл не подставляется в карточку сразу: в книге бывает несколько листов,
+  // а над таблицей — шапка отчёта, поэтому сначала показываем разбор и даём
+  // выбрать лист и строку заголовков.
   const handleFile = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -854,28 +885,73 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        // .csv читаем как UTF-8 текст (type: 'string') — иначе SheetJS определяет
-        // кодировку по сырым байтам и кириллица без BOM превращается в кракозябры.
-        const wb = isCsv
-          ? XLSX.read(reader.result as string, { type: 'string' })
-          : XLSX.read(reader.result as ArrayBuffer, { type: 'array' });
-        const sheet = wb.Sheets[wb.SheetNames[0]];
-        const raw = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' });
-        const nonEmpty = raw.filter((r) => r.length > 0);
-        if (nonEmpty.length === 0) throw new Error('empty');
-        const [headerRow, ...bodyRows] = nonEmpty;
-        const headers = headerRow.map((h) => String(h ?? ''));
-        const rows = bodyRows.map((r) => headers.map((_, i) => String(r[i] ?? '')));
-        // Данные заменились целиком — старая раскраска к ним уже не относится.
-        setDraft({ ...draft, headers, rows, cellColors: undefined, headerColors: undefined });
+        const data = (isCsv ? String(reader.result) : reader.result) as ArrayBuffer | string;
+        const { sheets } = parseTableFile(data, { isCsv, fillMerged: true });
+        if (!sheets.length) throw new Error('empty');
+        setImportDraft({
+          fileName: file.name,
+          data,
+          isCsv,
+          sheets,
+          sheetIndex: 0,
+          headerRow: sheets[0].headerRow,
+          fillMerged: true,
+          keepColors: true,
+        });
         setImportError(null);
       } catch {
-        setImportError('Не удалось прочитать файл. Поддерживаются .xlsx, .xls, .csv с заголовками в первой строке.');
+        setImportDraft(null);
+        setImportError('Не удалось прочитать файл. Поддерживаются .xlsx, .xls и .csv.');
       }
     };
     if (isCsv) reader.readAsText(file, 'utf-8');
     else reader.readAsArrayBuffer(file);
     e.target.value = '';
+  };
+
+  const updateImport = (patch: Partial<ImportDraft>) => setImportDraft((prev) => (prev ? { ...prev, ...patch } : prev));
+
+  // Объединённые ячейки размножаются на этапе разбора, поэтому переключатель
+  // требует перечитать файл — он для этого и хранится в состоянии.
+  const setFillMerged = (fillMerged: boolean) => {
+    if (!importDraft) return;
+    try {
+      const { sheets } = parseTableFile(importDraft.data, { isCsv: importDraft.isCsv, fillMerged });
+      if (!sheets.length) return;
+      const sheetIndex = Math.min(importDraft.sheetIndex, sheets.length - 1);
+      updateImport({
+        fillMerged,
+        sheets,
+        sheetIndex,
+        headerRow: Math.min(importDraft.headerRow, sheets[sheetIndex].rows.length - 1),
+      });
+    } catch {
+      setImportError('Не удалось перечитать файл.');
+    }
+  };
+
+  const applyImport = () => {
+    if (!importDraft) return;
+    const sheet = importDraft.sheets[importDraft.sheetIndex];
+    const headerLine = sheet.rows[importDraft.headerRow] || [];
+    const body = sheet.rows.slice(importDraft.headerRow + 1);
+    const headers = headerLine.map((h) => String(h ?? ''));
+    const rows = body.map((r) => headers.map((_, i) => String(r[i] ?? '')));
+    const withColors = importDraft.keepColors && sheet.colored > 0;
+    setDraft({
+      ...draft,
+      headers,
+      rows,
+      // Данные заменились целиком — прежняя раскраска и ширины столбцов к ним
+      // уже не относятся.
+      headerColors: withColors ? headers.map((_, i) => sheet.colors[importDraft.headerRow]?.[i] || 'none') : undefined,
+      cellColors: withColors
+        ? body.map((_, ri) => headers.map((__, ci) => sheet.colors[importDraft.headerRow + 1 + ri]?.[ci] || 'none'))
+        : undefined,
+      columnWidths: undefined,
+    });
+    setImportDraft(null);
+    setPicker(null);
   };
 
   const setHeader = (idx: number, value: string) => {
@@ -893,6 +969,7 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
       rows,
       cellColors: draft.cellColors ? fitColors(rows, headers, draft.cellColors) : undefined,
       headerColors: draft.headerColors ? [...draft.headerColors, 'none'] : undefined,
+      columnWidths: draft.columnWidths ? [...fitColumnWidths(draft.headers, draft.columnWidths), null] : undefined,
     });
   };
 
@@ -910,6 +987,9 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
         ? fitColors(draft.rows, draft.headers, draft.cellColors).map((r) => r.filter((_, i) => i !== idx))
         : undefined,
       headerColors: draft.headerColors ? draft.headerColors.filter((_, i) => i !== idx) : undefined,
+      columnWidths: draft.columnWidths
+        ? normalizeColumnWidths(fitColumnWidths(draft.headers, draft.columnWidths).filter((_, i) => i !== idx))
+        : undefined,
     });
     setPicker(null);
   };
@@ -969,6 +1049,52 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
   };
 
   const clearColors = () => setDraft({ ...draft, cellColors: undefined, headerColors: undefined });
+
+  // Ширина столбца в пикселях; null — по содержимому. Текст в ячейках
+  // переносится по словам, поэтому узкий столбец ничего не обрезает.
+  const setColumnWidth = (idx: number, width: number | null) => {
+    const widths = fitColumnWidths(draft.headers, draft.columnWidths);
+    widths[idx] = width == null ? null : clampColumnWidth(width);
+    setDraft({ ...draft, columnWidths: normalizeColumnWidths(widths) });
+  };
+
+  const clearColumnWidths = () => setDraft({ ...draft, columnWidths: undefined });
+
+  /** Тянем правую границу заголовка — как в таблице Excel. */
+  const startColumnDrag = (idx: number, clientX: number) => {
+    const th = headerRefs.current[idx];
+    const startWidth = columnWidthAt(draft, idx) ?? (th ? th.getBoundingClientRect().width : 130);
+    dragRef.current = { col: idx, startX: clientX, startWidth };
+    setDragCol(idx);
+  };
+
+  useEffect(() => {
+    if (dragCol == null) return;
+    const move = (clientX: number) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      setColumnWidth(drag.col, drag.startWidth + (clientX - drag.startX));
+    };
+    const onMouseMove = (e: MouseEvent) => move(e.clientX);
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches[0]) move(e.touches[0].clientX);
+    };
+    const stop = () => {
+      dragRef.current = null;
+      setDragCol(null);
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', stop);
+    window.addEventListener('touchmove', onTouchMove);
+    window.addEventListener('touchend', stop);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', stop);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', stop);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragCol, draft]);
 
   const hasColors =
     (draft.cellColors || []).some((r) => (r || []).some((c) => c && c !== 'none')) ||
@@ -1034,6 +1160,155 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
     );
   };
 
+  // Разбор файла до подстановки в карточку: лист, строка заголовков и что
+  // делать с объединёнными ячейками и заливкой Excel.
+  const importPanel = () => {
+    if (!importDraft) return null;
+    const sheet = importDraft.sheets[importDraft.sheetIndex];
+    const maxHeaderRow = Math.max(0, sheet.rows.length - 1);
+    const headerLine = sheet.rows[importDraft.headerRow] || [];
+    const preview = sheet.rows.slice(importDraft.headerRow + 1, importDraft.headerRow + 4);
+    const previewCols = Math.min(headerLine.length, 7);
+    const bodyRows = Math.max(0, sheet.rows.length - importDraft.headerRow - 1);
+
+    return (
+      <div className="mt-2 p-3 rounded-xl bg-[#131316] border border-indigo-500/30 space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-semibold text-zinc-200">{importDraft.fileName}</span>
+          <span className="text-[11px] text-[#71717a]">
+            листов: {importDraft.sheets.length} · будет {bodyRows} строк × {headerLine.length} столбцов
+          </span>
+          <button
+            type="button"
+            onClick={() => setImportDraft(null)}
+            className="ml-auto text-[11px] text-zinc-400 hover:text-white transition-colors"
+          >
+            Отмена
+          </button>
+        </div>
+
+        <div className="flex flex-wrap items-end gap-3">
+          {importDraft.sheets.length > 1 && (
+            <label className="text-[11px] text-[#a1a1aa]">
+              <span className="block mb-1">Лист</span>
+              <select
+                value={importDraft.sheetIndex}
+                onChange={(e) => {
+                  const idx = Number(e.target.value);
+                  updateImport({ sheetIndex: idx, headerRow: importDraft.sheets[idx].headerRow });
+                }}
+                className="bg-[#0f0f11] border border-[#27272a] rounded-lg px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500 max-w-[220px]"
+              >
+                {importDraft.sheets.map((s, i) => (
+                  <option key={s.name} value={i}>
+                    {s.name} ({s.rows.length} стр.)
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          <label className="text-[11px] text-[#a1a1aa]">
+            <span className="block mb-1">Строка заголовков</span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => updateImport({ headerRow: Math.max(0, importDraft.headerRow - 1) })}
+                className="px-2 py-1.5 rounded-lg bg-[#0f0f11] border border-[#27272a] text-zinc-300 hover:text-white transition-colors"
+              >
+                −
+              </button>
+              <input
+                type="number"
+                min={1}
+                max={maxHeaderRow + 1}
+                value={importDraft.headerRow + 1}
+                onChange={(e) =>
+                  updateImport({ headerRow: Math.max(0, Math.min(maxHeaderRow, Number(e.target.value) - 1)) })
+                }
+                className="w-14 bg-[#0f0f11] border border-[#27272a] rounded-lg px-2 py-1.5 text-xs text-zinc-200 text-center focus:outline-none focus:border-indigo-500"
+              />
+              <button
+                type="button"
+                onClick={() => updateImport({ headerRow: Math.min(maxHeaderRow, importDraft.headerRow + 1) })}
+                className="px-2 py-1.5 rounded-lg bg-[#0f0f11] border border-[#27272a] text-zinc-300 hover:text-white transition-colors"
+              >
+                +
+              </button>
+            </div>
+          </label>
+
+          <div className="flex flex-col gap-1.5 text-[11px] text-[#a1a1aa]">
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input type="checkbox" checked={importDraft.fillMerged} onChange={(e) => setFillMerged(e.target.checked)} />
+              Размножать объединённые ячейки
+            </label>
+            <label className={`flex items-center gap-1.5 ${sheet.colored ? 'cursor-pointer' : 'opacity-40'}`}>
+              <input
+                type="checkbox"
+                disabled={!sheet.colored}
+                checked={importDraft.keepColors && sheet.colored > 0}
+                onChange={(e) => updateImport({ keepColors: e.target.checked })}
+              />
+              Переносить заливку из Excel{sheet.colored ? ` (${sheet.colored})` : ' — её нет'}
+            </label>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto border border-[#27272a] rounded-lg bg-[#0f0f11]">
+          <table className="text-[11px] w-full">
+            <thead>
+              <tr className="bg-[#161619]">
+                {headerLine.slice(0, previewCols).map((h, i) => (
+                  <th
+                    key={i}
+                    className={`text-left align-top p-1.5 font-semibold whitespace-pre-wrap break-words max-w-[140px] ${
+                      cellColorClass(importDraft.keepColors ? sheet.colors[importDraft.headerRow]?.[i] : 'none') ||
+                      'text-zinc-300'
+                    }`}
+                  >
+                    {h || <span className="text-[#3f3f46]">без названия</span>}
+                  </th>
+                ))}
+                {headerLine.length > previewCols && <th className="p-1.5 text-[#52525b]">…</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {preview.map((row, ri) => (
+                <tr key={ri} className="border-t border-[#1f1f23]">
+                  {row.slice(0, previewCols).map((v, ci) => (
+                    <td
+                      key={ci}
+                      className={`align-top p-1.5 whitespace-pre-wrap break-words max-w-[140px] ${
+                        cellColorClass(
+                          importDraft.keepColors ? sheet.colors[importDraft.headerRow + 1 + ri]?.[ci] : 'none'
+                        ) || 'text-zinc-400'
+                      }`}
+                    >
+                      {v}
+                    </td>
+                  ))}
+                  {headerLine.length > previewCols && <td className="p-1.5 text-[#52525b]">…</td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={applyImport}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-500/20 border border-indigo-500/40 text-indigo-200 hover:bg-indigo-500/30 transition-colors"
+          >
+            <Upload className="w-3.5 h-3.5" /> Импортировать в карточку
+          </button>
+          <span className="text-[11px] text-[#71717a]">Текущее содержимое таблицы будет заменено.</span>
+        </div>
+      </div>
+    );
+  };
+
   const togglePicker = (row: number | 'h', col: number) =>
     setPicker((p) => (p && p.row === row && p.col === col ? null : { row, col }));
 
@@ -1046,28 +1321,63 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
           <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFile} />
         </label>
         {importError && <p className="text-[11px] text-rose-400 mt-1.5">{importError}</p>}
-        <p className="text-[11px] text-[#71717a] mt-1.5">Первая строка файла считается заголовками столбцов. Данные также можно править вручную ниже.</p>
+        {!importDraft && (
+          <p className="text-[11px] text-[#71717a] mt-1.5">
+            Даты, проценты и числа переносятся в том виде, в каком их показывает Excel; переносы строк внутри ячеек
+            сохраняются. После выбора файла можно указать лист и строку заголовков. Данные также можно править вручную ниже.
+          </p>
+        )}
+        {importDraft && importPanel()}
       </div>
 
       <div>
         <div className="flex items-center justify-between gap-3">
           <label className={labelCls()}>Данные</label>
-          {hasColors && (
-            <button
-              type="button"
-              onClick={clearColors}
-              className="text-[11px] text-zinc-400 hover:text-white transition-colors mb-1"
-            >
-              Убрать всю заливку
-            </button>
-          )}
+          <div className="flex items-center gap-3 mb-1">
+            {fixedWidths && (
+              <button
+                type="button"
+                onClick={clearColumnWidths}
+                className="text-[11px] text-zinc-400 hover:text-white transition-colors"
+              >
+                Ширина столбцов — авто
+              </button>
+            )}
+            {hasColors && (
+              <button
+                type="button"
+                onClick={clearColors}
+                className="text-[11px] text-zinc-400 hover:text-white transition-colors"
+              >
+                Убрать всю заливку
+              </button>
+            )}
+          </div>
         </div>
         <div className="overflow-x-auto border border-[#27272a] rounded-xl">
-          <table className="w-full text-xs">
+          <table
+            className={`text-xs w-full ${fixedWidths ? 'table-fixed' : ''}`}
+            style={fixedWidths ? { minWidth: tableMinWidth(draft) + 40 } : undefined}
+          >
+            {fixedWidths && (
+              <colgroup>
+                {draft.headers.map((_, ci) => {
+                  const width = columnWidthAt(draft, ci);
+                  return <col key={ci} style={width ? { width } : undefined} />;
+                })}
+                <col style={{ width: 40 }} />
+              </colgroup>
+            )}
             <thead>
               <tr className="border-b border-[#27272a] bg-[#161619]">
                 {draft.headers.map((h, ci) => (
-                  <th key={ci} className={`p-2 min-w-[130px] ${cellColorClass(headerColorAt(draft, ci))}`}>
+                  <th
+                    key={ci}
+                    ref={(el) => {
+                      headerRefs.current[ci] = el;
+                    }}
+                    className={`relative p-2 align-top ${fixedWidths ? '' : 'min-w-[130px]'} ${cellColorClass(headerColorAt(draft, ci))}`}
+                  >
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
@@ -1093,17 +1403,52 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
                         </button>
                       )}
                     </div>
+
+                    {/* Ширина столбца: точное значение полем и «на глаз» —
+                        перетаскиванием правой границы заголовка. */}
+                    <div className="flex items-center gap-1 mt-1.5 text-[10px] text-[#52525b] font-normal">
+                      <MoveHorizontal className="w-3 h-3 flex-shrink-0" />
+                      <input
+                        type="number"
+                        min={MIN_COLUMN_WIDTH}
+                        max={MAX_COLUMN_WIDTH}
+                        step={10}
+                        value={columnWidthAt(draft, ci) ?? ''}
+                        placeholder="авто"
+                        title="Ширина столбца в пикселях (пусто — по содержимому)"
+                        onChange={(e) => setColumnWidth(ci, e.target.value === '' ? null : Number(e.target.value))}
+                        className="w-14 bg-[#0f0f11] border border-[#27272a] rounded px-1 py-0.5 text-zinc-300 text-[10px] focus:outline-none focus:border-indigo-500"
+                      />
+                      <span>px</span>
+                    </div>
+
+                    <span
+                      role="separator"
+                      aria-label="Потяните, чтобы изменить ширину столбца"
+                      title="Потяните, чтобы изменить ширину столбца. Двойной щелчок — авто"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        startColumnDrag(ci, e.clientX);
+                      }}
+                      onTouchStart={(e) => {
+                        if (e.touches[0]) startColumnDrag(ci, e.touches[0].clientX);
+                      }}
+                      onDoubleClick={() => setColumnWidth(ci, null)}
+                      className={`absolute top-0 right-0 h-full w-2 cursor-col-resize transition-colors ${
+                        dragCol === ci ? 'bg-indigo-500/60' : 'hover:bg-indigo-500/30'
+                      }`}
+                    />
                   </th>
                 ))}
-                <th className="p-2 w-8" />
+                <th className="p-2 w-10" />
               </tr>
             </thead>
             <tbody>
               {draft.rows.map((row, ri) => (
                 <tr key={ri} className="border-b border-[#1f1f23] last:border-b-0">
                   {draft.headers.map((_, ci) => (
-                    <td key={ci} className={`p-2 ${cellColorClass(cellColorAt(draft, ri, ci))}`}>
-                      <div className="flex items-center gap-1">
+                    <td key={ci} className={`p-2 align-top ${cellColorClass(cellColorAt(draft, ri, ci))}`}>
+                      <div className="flex items-start gap-1">
                         <button
                           type="button"
                           title="Цвет ячейки"

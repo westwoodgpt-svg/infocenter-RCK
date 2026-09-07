@@ -109,6 +109,10 @@ export interface TableCard extends BaseCard {
   cellColors?: TableCellColor[][];
   /** Цвет ячеек строки заголовков, выровнен по headers. */
   headerColors?: TableCellColor[];
+  /** Ширина столбцов в пикселях, выровнена по headers. null или отсутствие
+   *  значения = ширина по содержимому. Текст в ячейках переносится по словам,
+   *  поэтому узкий столбец не обрезает содержимое, а делает строку выше. */
+  columnWidths?: (number | null)[];
 }
 
 export interface ImageCard extends BaseCard {

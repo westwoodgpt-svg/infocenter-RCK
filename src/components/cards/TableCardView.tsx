@@ -1,9 +1,13 @@
 import { Table2 } from 'lucide-react';
 import { TableCard } from '../../types';
 import { cellColorAt, cellColorClass, headerColorAt } from './tableColors';
+import { columnWidthAt, hasColumnWidths, tableMinWidth } from './tableWidths';
 
 export default function TableCardView({ card }: { card: TableCard }) {
   const hasData = card.headers.length > 0;
+  // Заданы ширины столбцов — переходим на фиксированную раскладку, иначе
+  // браузер считает ширину подсказкой и растягивает столбец под содержимое.
+  const fixed = hasColumnWidths(card);
 
   return (
     <div className="p-6">
@@ -20,13 +24,24 @@ export default function TableCardView({ card }: { card: TableCard }) {
         </div>
       ) : (
         <div className="overflow-x-auto border border-[#27272a] rounded-xl">
-          <table className="w-full text-xs">
+          <table
+            className={`text-xs ${fixed ? 'table-fixed w-full' : 'w-full'}`}
+            style={fixed ? { minWidth: tableMinWidth(card) } : undefined}
+          >
+            {fixed && (
+              <colgroup>
+                {card.headers.map((_, i) => {
+                  const width = columnWidthAt(card, i);
+                  return <col key={i} style={width ? { width } : undefined} />;
+                })}
+              </colgroup>
+            )}
             <thead>
               <tr className="border-b border-[#27272a] bg-[#161619]">
                 {card.headers.map((h, i) => (
                   <th
                     key={i}
-                    className={`text-left p-2.5 font-semibold whitespace-nowrap ${
+                    className={`text-left align-top p-2.5 font-semibold whitespace-pre-wrap break-words ${
                       cellColorClass(headerColorAt(card, i)) || 'text-zinc-300'
                     }`}
                   >
@@ -41,7 +56,9 @@ export default function TableCardView({ card }: { card: TableCard }) {
                   {card.headers.map((_, ci) => {
                     const fill = cellColorClass(cellColorAt(card, ri, ci));
                     return (
-                      <td key={ci} className={`p-2.5 whitespace-nowrap ${fill || 'text-zinc-300'}`}>
+                      // Длинный текст переносится по словам, а не растягивает
+                      // таблицу в бесконечную горизонтальную прокрутку.
+                      <td key={ci} className={`p-2.5 align-top whitespace-pre-wrap break-words ${fill || 'text-zinc-300'}`}>
                         {row[ci] ?? ''}
                       </td>
                     );

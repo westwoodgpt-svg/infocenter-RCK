@@ -4,6 +4,7 @@
 // что он может в них делать, решает сервер по данным Битрикс24 (api/_access.js);
 // идентификатор инфоцентра из запроса всегда проверяется по этому списку.
 import { boardAccess, resolveAccess, resolveIdentity, storagePrefixFor } from './_access.js';
+import { ensureLegacyCopy } from './_seedCopy.js';
 import {
   loadDashboard,
   saveDashboard,
@@ -66,6 +67,10 @@ export default async function handler(req, res) {
     const access = await resolveAccess(identity);
 
     if (action === 'bootstrap') {
+      // Разовая копия инфоцентра РЦК отделу-получателю (см. api/_seedCopy.js).
+      // Выполняется один раз за всё время и не трогает инфоцентр, в котором уже
+      // есть карточки, поэтому на обычную работу и правки не влияет.
+      await ensureLegacyCopy();
       res.status(200).json({
         ok: true,
         me: { id: identity.id, name: identity.name, isAdmin: identity.isAdmin },
