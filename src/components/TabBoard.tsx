@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { LayoutGrid, Plus } from 'lucide-react';
 import { AnyCard, TabId } from '../types';
@@ -58,6 +58,15 @@ function BoardCard({
   const [selected, setSelected] = useState<number | null>(null);
   const shown = version ? version.card : card;
 
+  // История доступна только в режиме редактирования. Вышли из него — карточка
+  // возвращается к текущей версии, иначе на дашборде осталась бы висеть
+  // прошлая, а вернуть её было бы нечем: таймлайн уже скрыт.
+  useEffect(() => {
+    if (editMode) return;
+    setVersion(null);
+    setSelected(null);
+  }, [editMode]);
+
   return (
     <CardShell
       editMode={editMode}
@@ -73,18 +82,20 @@ function BoardCard({
       dimmed={version !== null}
     >
       <CardView card={shown} />
-      <CardHistoryBar
-        tab={tab}
-        card={card}
-        editMode={editMode}
-        loadHistory={loadHistory}
-        selected={selected}
-        onSelect={(v, idx) => {
-          setVersion(v);
-          setSelected(idx);
-        }}
-        onRestore={onRestore}
-      />
+      {editMode && (
+        <CardHistoryBar
+          tab={tab}
+          card={card}
+          editMode={editMode}
+          loadHistory={loadHistory}
+          selected={selected}
+          onSelect={(v, idx) => {
+            setVersion(v);
+            setSelected(idx);
+          }}
+          onRestore={onRestore}
+        />
+      )}
     </CardShell>
   );
 }

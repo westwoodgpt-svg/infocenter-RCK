@@ -1,7 +1,7 @@
-import { useState, ChangeEvent } from 'react';
+import { useEffect, useRef, useState, ChangeEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Plus, Trash2, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Upload, ImagePlus, Palette } from 'lucide-react';
+import { X, Plus, Trash2, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Upload, ImagePlus, Palette, MoveHorizontal } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { dataUrlSizeLabel, fileToDataUrl } from '../imageFile';
 import {
@@ -29,6 +29,16 @@ import { usePortalUsers } from '../usePortalUsers';
 import { isInIframe } from '../bitrix';
 import { colorFor } from './cards/palette';
 import { cellColorAt, cellColorClass, headerColorAt, swatchClass, TABLE_CELL_COLORS } from './cards/tableColors';
+import {
+  clampColumnWidth,
+  columnWidthAt,
+  fitColumnWidths,
+  hasColumnWidths,
+  MAX_COLUMN_WIDTH,
+  MIN_COLUMN_WIDTH,
+  normalizeColumnWidths,
+  tableMinWidth,
+} from './cards/tableWidths';
 
 interface CardEditorModalProps {
   open: boolean;
@@ -840,6 +850,11 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
   const [importError, setImportError] = useState<string | null>(null);
   // Открытая палитра: 'h' — ячейка заголовка, число — индекс строки тела.
   const [picker, setPicker] = useState<{ row: number | 'h'; col: number } | null>(null);
+  // Столбец, ширину которого сейчас тянут мышью за правую границу заголовка.
+  const [dragCol, setDragCol] = useState<number | null>(null);
+  const dragRef = useRef<{ col: number; startX: number; startWidth: number } | null>(null);
+  const headerRefs = useRef<(HTMLTableCellElement | null)[]>([]);
+  const fixedWidths = hasColumnWidths(draft);
 
   // Цвета живут в отдельной сетке, выровненной по строкам/столбцам таблицы.
   // Приводим её к текущему размеру при каждой правке структуры, иначе после
@@ -866,8 +881,9 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
         const [headerRow, ...bodyRows] = nonEmpty;
         const headers = headerRow.map((h) => String(h ?? ''));
         const rows = bodyRows.map((r) => headers.map((_, i) => String(r[i] ?? '')));
-        // Данные заменились целиком — старая раскраска к ним уже не относится.
-        setDraft({ ...draft, headers, rows, cellColors: undefined, headerColors: undefined });
+        // Данные заменились целиком — старая раскраска и ширины столбцов к ним
+        // уже не относятся.
+        setDraft({ ...draft, headers, rows, cellColors: undefined, headerColors: undefined, columnWidths: undefined });
         setImportError(null);
       } catch {
         setImportError('Не удалось прочитать файл. Поддерживаются .xlsx, .xls, .csv с заголовками в первой строке.');
@@ -893,6 +909,7 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
       rows,
       cellColors: draft.cellColors ? fitColors(rows, headers, draft.cellColors) : undefined,
       headerColors: draft.headerColors ? [...draft.headerColors, 'none'] : undefined,
+      columnWidths: draft.columnWidths ? [...fitColumnWidths(draft.headers, draft.columnWidths), null] : undefined,
     });
   };
 
@@ -910,6 +927,9 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
         ? fitColors(draft.rows, draft.headers, draft.cellColors).map((r) => r.filter((_, i) => i !== idx))
         : undefined,
       headerColors: draft.headerColors ? draft.headerColors.filter((_, i) => i !== idx) : undefined,
+      columnWidths: draft.columnWidths
+        ? normalizeColumnWidths(fitColumnWidths(draft.headers, draft.columnWidths).filter((_, i) => i !== idx))
+        : undefined,
     });
     setPicker(null);
   };
@@ -969,6 +989,52 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
   };
 
   const clearColors = () => setDraft({ ...draft, cellColors: undefined, headerColors: undefined });
+
+  // Ширина столбца в пикселях; null — по содержимому. Текст в ячейках
+  // переносится по словам, поэтому узкий столбец ничего не обрезает.
+  const setColumnWidth = (idx: number, width: number | null) => {
+    const widths = fitColumnWidths(draft.headers, draft.columnWidths);
+    widths[idx] = width == null ? null : clampColumnWidth(width);
+    setDraft({ ...draft, columnWidths: normalizeColumnWidths(widths) });
+  };
+
+  const clearColumnWidths = () => setDraft({ ...draft, columnWidths: undefined });
+
+  /** Тянем правую границу заголовка — как в таблице Excel. */
+  const startColumnDrag = (idx: number, clientX: number) => {
+    const th = headerRefs.current[idx];
+    const startWidth = columnWidthAt(draft, idx) ?? (th ? th.getBoundingClientRect().width : 130);
+    dragRef.current = { col: idx, startX: clientX, startWidth };
+    setDragCol(idx);
+  };
+
+  useEffect(() => {
+    if (dragCol == null) return;
+    const move = (clientX: number) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      setColumnWidth(drag.col, drag.startWidth + (clientX - drag.startX));
+    };
+    const onMouseMove = (e: MouseEvent) => move(e.clientX);
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches[0]) move(e.touches[0].clientX);
+    };
+    const stop = () => {
+      dragRef.current = null;
+      setDragCol(null);
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', stop);
+    window.addEventListener('touchmove', onTouchMove);
+    window.addEventListener('touchend', stop);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', stop);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', stop);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragCol, draft]);
 
   const hasColors =
     (draft.cellColors || []).some((r) => (r || []).some((c) => c && c !== 'none')) ||
@@ -1052,22 +1118,51 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
       <div>
         <div className="flex items-center justify-between gap-3">
           <label className={labelCls()}>Данные</label>
-          {hasColors && (
-            <button
-              type="button"
-              onClick={clearColors}
-              className="text-[11px] text-zinc-400 hover:text-white transition-colors mb-1"
-            >
-              Убрать всю заливку
-            </button>
-          )}
+          <div className="flex items-center gap-3 mb-1">
+            {fixedWidths && (
+              <button
+                type="button"
+                onClick={clearColumnWidths}
+                className="text-[11px] text-zinc-400 hover:text-white transition-colors"
+              >
+                Ширина столбцов — авто
+              </button>
+            )}
+            {hasColors && (
+              <button
+                type="button"
+                onClick={clearColors}
+                className="text-[11px] text-zinc-400 hover:text-white transition-colors"
+              >
+                Убрать всю заливку
+              </button>
+            )}
+          </div>
         </div>
         <div className="overflow-x-auto border border-[#27272a] rounded-xl">
-          <table className="w-full text-xs">
+          <table
+            className={`text-xs w-full ${fixedWidths ? 'table-fixed' : ''}`}
+            style={fixedWidths ? { minWidth: tableMinWidth(draft) + 40 } : undefined}
+          >
+            {fixedWidths && (
+              <colgroup>
+                {draft.headers.map((_, ci) => {
+                  const width = columnWidthAt(draft, ci);
+                  return <col key={ci} style={width ? { width } : undefined} />;
+                })}
+                <col style={{ width: 40 }} />
+              </colgroup>
+            )}
             <thead>
               <tr className="border-b border-[#27272a] bg-[#161619]">
                 {draft.headers.map((h, ci) => (
-                  <th key={ci} className={`p-2 min-w-[130px] ${cellColorClass(headerColorAt(draft, ci))}`}>
+                  <th
+                    key={ci}
+                    ref={(el) => {
+                      headerRefs.current[ci] = el;
+                    }}
+                    className={`relative p-2 align-top ${fixedWidths ? '' : 'min-w-[130px]'} ${cellColorClass(headerColorAt(draft, ci))}`}
+                  >
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
@@ -1093,17 +1188,52 @@ function TableFields({ draft, setDraft }: { draft: TableCard; setDraft: (c: AnyC
                         </button>
                       )}
                     </div>
+
+                    {/* Ширина столбца: точное значение полем и «на глаз» —
+                        перетаскиванием правой границы заголовка. */}
+                    <div className="flex items-center gap-1 mt-1.5 text-[10px] text-[#52525b] font-normal">
+                      <MoveHorizontal className="w-3 h-3 flex-shrink-0" />
+                      <input
+                        type="number"
+                        min={MIN_COLUMN_WIDTH}
+                        max={MAX_COLUMN_WIDTH}
+                        step={10}
+                        value={columnWidthAt(draft, ci) ?? ''}
+                        placeholder="авто"
+                        title="Ширина столбца в пикселях (пусто — по содержимому)"
+                        onChange={(e) => setColumnWidth(ci, e.target.value === '' ? null : Number(e.target.value))}
+                        className="w-14 bg-[#0f0f11] border border-[#27272a] rounded px-1 py-0.5 text-zinc-300 text-[10px] focus:outline-none focus:border-indigo-500"
+                      />
+                      <span>px</span>
+                    </div>
+
+                    <span
+                      role="separator"
+                      aria-label="Потяните, чтобы изменить ширину столбца"
+                      title="Потяните, чтобы изменить ширину столбца. Двойной щелчок — авто"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        startColumnDrag(ci, e.clientX);
+                      }}
+                      onTouchStart={(e) => {
+                        if (e.touches[0]) startColumnDrag(ci, e.touches[0].clientX);
+                      }}
+                      onDoubleClick={() => setColumnWidth(ci, null)}
+                      className={`absolute top-0 right-0 h-full w-2 cursor-col-resize transition-colors ${
+                        dragCol === ci ? 'bg-indigo-500/60' : 'hover:bg-indigo-500/30'
+                      }`}
+                    />
                   </th>
                 ))}
-                <th className="p-2 w-8" />
+                <th className="p-2 w-10" />
               </tr>
             </thead>
             <tbody>
               {draft.rows.map((row, ri) => (
                 <tr key={ri} className="border-b border-[#1f1f23] last:border-b-0">
                   {draft.headers.map((_, ci) => (
-                    <td key={ci} className={`p-2 ${cellColorClass(cellColorAt(draft, ri, ci))}`}>
-                      <div className="flex items-center gap-1">
+                    <td key={ci} className={`p-2 align-top ${cellColorClass(cellColorAt(draft, ri, ci))}`}>
+                      <div className="flex items-start gap-1">
                         <button
                           type="button"
                           title="Цвет ячейки"
