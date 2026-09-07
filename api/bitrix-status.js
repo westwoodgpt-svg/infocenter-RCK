@@ -4,6 +4,7 @@
 import { peekServiceToken, peekLastOpenAttempt } from './_bitrixAuth.js';
 import { peekDashboard } from './_store.js';
 import { getDepartmentTree, departmentTreeError, LEGACY_BOARD_ID } from './_access.js';
+import { peekLegacyCopy } from './_seedCopy.js';
 
 export default async function handler(req, res) {
   const hasRedisUrl = Boolean(process.env.REDIS_URL);
@@ -36,6 +37,8 @@ export default async function handler(req, res) {
     // отдельные инфоцентры по отделам или все видят общий инфоцентр РЦК.
     const departments = await getDepartmentTree().catch(() => null);
     const departmentsError = departments ? null : await departmentTreeError().catch(() => null);
+    // Разовая копия инфоцентра РЦК отделу-получателю: сделана или нет.
+    const legacyCopy = await peekLegacyCopy();
     res.status(200).json({
       ok: true,
       deployedCommit,
@@ -48,6 +51,7 @@ export default async function handler(req, res) {
         ? { count: departments.length, withHead: departments.filter((d) => d.headId).length }
         : null,
       departmentsError,
+      legacyCopy,
       legacyDepartmentId: process.env.INFOCENTER_LEGACY_DEPARTMENT_ID || null,
       hiddenDepartments: process.env.INFOCENTER_HIDDEN_DEPARTMENTS || null,
       serviceToken: token
