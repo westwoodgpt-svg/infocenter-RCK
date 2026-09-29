@@ -7,13 +7,18 @@
 // 2. Вложения витрины, лежащие в Vercel Blob, скачивает в UPLOAD_DIR и
 //    переписывает ссылки на /uploads/… — в самой витрине и в её истории.
 //
+// 3. Сверяет каждый инфоцентр «было на Vercel → стало здесь» (номер версии и
+//    число карточек по вкладкам), отдельно — инфоцентр РЦК. Любое расхождение —
+//    ошибка с кодом 3. Перед копированием сохраняет все инфоцентры с Vercel
+//    в JSON-файл (BACKUP_DIR, по умолчанию каталог над UPLOAD_DIR).
+//
 // Запуск — через deploy/migrate.sh (он подставляет /etc/infocenter-rck.env).
 // По умолчанию отказывается перезаписывать непустой Redis этого сервера,
 // чтобы не затереть правки, сделанные уже здесь; --force снимает запрет.
 import Redis from 'ioredis';
 import { randomBytes } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const PATTERN = 'rck:*';
 // Кэш сессий сотрудников — временный, переносить незачем.
@@ -22,6 +27,7 @@ const BLOB_URL_RE = /https:\/\/[a-z0-9-]+\.public\.blob\.vercel-storage\.com\/[^
 const SHOWCASE_CURRENT = 'rck:board:showcase:current';
 
 const force = process.argv.includes('--force');
+const verifyOnly = process.argv.includes('--verify');
 const { OLD_REDIS_URL, REDIS_URL, UPLOAD_DIR } = process.env;
 if (!OLD_REDIS_URL || !REDIS_URL) {
   console.error('Нужны OLD_REDIS_URL (Redis Vercel) и REDIS_URL (Redis этого сервера).');
@@ -153,10 +159,77 @@ async function moveBlobFiles() {
   console.log(`Vercel Blob: скачано файлов — ${replacements.size} из ${urls.size}, ссылки переписаны.`);
 }
 
+// Состояния инфоцентров: rck:board:<id>:current и ключ до разделения по отделам.
+const BOARD_CURRENT_RE = /^rck:board:[^:]+:current$/;
+const LEGACY_CURRENT = 'rck:dashboard:current';
+
+async function boardRecords(client) {
+  const keys = (await scanAll(client, 'rck:board:*')).filter((k) => BOARD_CURRENT_RE.test(k));
+  if (await client.exists(LEGACY_CURRENT)) keys.push(LEGACY_CURRENT);
+  const out = {};
+  for (const key of keys.sort()) {
+    try {
+      out[key] = JSON.parse(await client.get(key));
+    } catch {
+      out[key] = null;
+    }
+  }
+  return out;
+}
+
+function summary(record) {
+  if (!record || !record.state) return 'пусто';
+  const counts = Object.entries(record.state)
+    .map(([tab, list]) => `${tab}:${Array.isArray(list) ? list.length : 0}`)
+    .join(' ');
+  return `версия ${record.rev} · ${counts}`;
+}
+
+async function backupSource() {
+  const records = await boardRecords(source);
+  const dir = process.env.BACKUP_DIR || (UPLOAD_DIR ? dirname(UPLOAD_DIR) : '.');
+  await mkdir(dir, { recursive: true });
+  const file = join(dir, `backup-from-vercel-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+  await writeFile(file, JSON.stringify(records, null, 1));
+  console.log(`Резервная копия инфоцентров с Vercel: ${file}`);
+}
+
+// Сверка «было → стало». Витрину сравниваем без ссылок на файлы: их
+// переписывает перенос вложений.
+async function verify() {
+  const before = await boardRecords(source);
+  const after = await boardRecords(target);
+  const strip = (rec, key) =>
+    key === SHOWCASE_CURRENT && rec ? JSON.stringify(rec.state).replace(/"url":"[^"]*"/g, '"url":""') : JSON.stringify(rec && rec.state);
+  let problems = 0;
+  console.log('\nСверка инфоцентров (Vercel → этот сервер):');
+  for (const key of Object.keys(before)) {
+    const same = strip(before[key], key) === strip(after[key], key) && (before[key] || {}).rev === (after[key] || {}).rev;
+    if (!same) problems += 1;
+    const label = key === 'rck:board:rck:current' || key === LEGACY_CURRENT ? `${key}  ← инфоцентр РЦК` : key;
+    console.log(`  ${same ? 'OK ' : 'НЕ СОВПАДАЕТ'}  ${label}\n        было:  ${summary(before[key])}\n        стало: ${summary(after[key])}`);
+  }
+  if (!Object.keys(before).length) console.log('  на Vercel не найдено ни одного инфоцентра — проверьте OLD_REDIS_URL');
+  const rckKeys = Object.keys(before).filter((k) => k === 'rck:board:rck:current' || k === LEGACY_CURRENT);
+  if (!rckKeys.length) console.log('  ВНИМАНИЕ: данных инфоцентра РЦК (rck:board:rck:current) на Vercel нет — проверьте OLD_REDIS_URL');
+  if (problems) {
+    console.error(`\nРасхождений: ${problems}. Не переключайте портал, пока они не устранены.`);
+    process.exitCode = 3;
+  } else if (Object.keys(before).length) {
+    console.log('\nВсе инфоцентры перенесены без расхождений.');
+  }
+}
+
 try {
-  await copyRedis();
-  await moveBlobFiles();
-  console.log('Перенос завершён.');
+  if (verifyOnly) {
+    await verify();
+  } else {
+    await backupSource();
+    await copyRedis();
+    await moveBlobFiles();
+    await verify();
+    console.log('Перенос завершён.');
+  }
 } catch (err) {
   console.error('Перенос прервался:', err instanceof Error ? err.message : err);
   process.exitCode = 1;
