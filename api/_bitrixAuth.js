@@ -26,7 +26,7 @@ export function redisClient() {
 function redis() {
   const url = process.env.REDIS_URL;
   if (!url) {
-    throw new Error('Redis (REDIS_URL) не подключён к проекту на Vercel');
+    throw new Error('Redis не подключён: не задана переменная REDIS_URL');
   }
   if (!client) {
     client = new Redis(url, { maxRetriesPerRequest: 2, lazyConnect: true });

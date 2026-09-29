@@ -11,8 +11,9 @@ export default async function handler(req, res) {
   const hasBitrixCreds = Boolean(process.env.BITRIX_CLIENT_ID && process.env.BITRIX_CLIENT_SECRET);
 
   // Позволяет сразу видеть, какой коммит реально обслуживает этот URL —
-  // Vercel прокидывает это в рантайм автоматически, без ручной настройки.
-  const deployedCommit = process.env.VERCEL_GIT_COMMIT_SHA || null;
+  // Vercel прокидывает это в рантайм автоматически, на своём сервере его
+  // выставляет server/index.js из git.
+  const deployedCommit = process.env.VERCEL_GIT_COMMIT_SHA || process.env.DEPLOYED_COMMIT || null;
 
   if (!hasRedisUrl || !hasBitrixCreds) {
     res.status(200).json({
@@ -21,7 +22,7 @@ export default async function handler(req, res) {
       hasRedisUrl,
       hasBitrixCreds,
       serviceToken: null,
-      hint: 'Не заданы переменные окружения на Vercel — проверьте REDIS_URL / BITRIX_CLIENT_ID / BITRIX_CLIENT_SECRET и сделайте Redeploy.',
+      hint: 'Не заданы переменные окружения — проверьте REDIS_URL / BITRIX_CLIENT_ID / BITRIX_CLIENT_SECRET (на своём сервере — /etc/infocenter-rck.env, затем systemctl restart infocenter-rck).',
     });
     return;
   }

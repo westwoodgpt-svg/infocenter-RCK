@@ -1,0 +1,23 @@
+[Unit]
+Description=Инфоцентр РЦК (Node.js)
+After=network-online.target redis-server.service
+Wants=network-online.target redis-server.service
+
+[Service]
+Type=simple
+User=infocenter
+Group=infocenter
+WorkingDirectory=/opt/infocenter-rck
+EnvironmentFile=/etc/infocenter-rck.env
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=3
+# Небольшая песочница: писать можно только в каталог с данными.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/infocenter-rck
+
+[Install]
+WantedBy=multi-user.target

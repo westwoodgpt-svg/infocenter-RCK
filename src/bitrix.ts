@@ -341,7 +341,8 @@ export async function saveSummaryConfigRemote(
 // Витрина: общий экран со стикерами для всех отделов
 // ---------------------------------------------------------------------------
 
-export type ShowcaseUploads = 'blob' | 'inline';
+/** Куда уходят вложения витрины: диск своего сервера, Vercel Blob или прямо в данные. */
+export type ShowcaseUploads = 'disk' | 'blob' | 'inline';
 
 export interface RemoteShowcase {
   state: ShowcaseState | null;
@@ -369,7 +370,7 @@ export async function loadShowcaseRemote(): Promise<{ data: RemoteShowcase | nul
       rev: data.rev,
       updatedAt: data.updatedAt,
       updatedBy: data.updatedBy,
-      uploads: data.uploads === 'blob' ? 'blob' : 'inline',
+      uploads: data.uploads === 'disk' || data.uploads === 'blob' ? data.uploads : 'inline',
     },
     error: null,
   };

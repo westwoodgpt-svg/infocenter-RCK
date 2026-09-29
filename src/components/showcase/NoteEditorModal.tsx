@@ -230,7 +230,7 @@ export default function NoteEditorModal({ note, isNew, uploads, loadHistory, onS
             </button>
             <input ref={fileRef} type="file" multiple className="hidden" onChange={onPickFiles} />
             <p className="text-[11px] text-[#71717a] mt-1.5">
-              {uploads === 'blob'
+              {uploads !== 'inline'
                 ? `Любые файлы до ${formatBytes(MAX_BLOB_BYTES)}. Картинки показываются на стикере и открываются во весь экран, остальные файлы — ссылкой.`
                 : `Хранилище файлов не подключено — можно прикладывать файлы до ${formatBytes(MAX_INLINE_BYTES)} (картинки ужимаются автоматически).`}
             </p>

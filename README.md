@@ -245,6 +245,12 @@ npm run lint        # tsc --noEmit
 
 ## Деплой
 
+**Свой сервер (без Vercel)** — установка одним скриптом, перенос данных из
+Redis и Vercel Blob, обновление и резервные копии: [`deploy/README.md`](deploy/README.md).
+Запуск локально так же, как на сервере: `npm run build && npm start`.
+
+**Vercel** (как было):
+
 Хостинг — Vercel (GitHub + Vercel, как в infocenter-IIC), автодеплой при пуше в
 `main`. Обязательная разовая настройка (Redis, `BITRIX_CLIENT_ID`/
 `BITRIX_CLIENT_SECRET`) — в [`DEPLOYMENT.md`](DEPLOYMENT.md).

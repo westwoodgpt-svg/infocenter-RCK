@@ -15,6 +15,7 @@ import {
   SHOWCASE_PREFIX,
 } from './_store.js';
 import { blobConfigured } from './showcase-upload.js';
+import { diskUploadsEnabled } from './showcase-file.js';
 
 // Сводный экран грузит несколько инфоцентров сразу, поэтому тяжёлые картинки в
 // нём не передаются — вместо них карточка помечается флагом.
@@ -210,9 +211,10 @@ export default async function handler(req, res) {
         rev: data ? data.rev : 0,
         updatedAt: data ? data.updatedAt : null,
         updatedBy: data ? data.updatedBy : null,
-        // Куда класть вложения: в хранилище файлов Vercel Blob или (пока оно
-        // не подключено) прямо в данные витрины — тогда только небольшие файлы.
-        uploads: blobConfigured() ? 'blob' : 'inline',
+        // Куда класть вложения: на диск своего сервера, в хранилище файлов
+        // Vercel Blob или (если нет ни того, ни другого) прямо в данные
+        // витрины — тогда только небольшие файлы.
+        uploads: diskUploadsEnabled() ? 'disk' : blobConfigured() ? 'blob' : 'inline',
       });
       return;
     }
