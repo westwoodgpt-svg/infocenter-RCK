@@ -31,6 +31,14 @@ const OPTION_KEY = 'rck_dashboard_v1';
 
 export const TABS = ['security', 'quality', 'production', 'costs', 'personnel'];
 
+// Витрина — общий для всей компании экран со стикерами. Хранится как любой
+// инфоцентр (своя история, слияние правок), только вместо пяти вкладок у неё
+// два списка: колонки и стикеры (у стикера — id колонки, порядок = порядок в
+// массиве). Поэтому слияние и история работают по тем же правилам, что у карточек.
+export const SHOWCASE_PREFIX = 'showcase';
+export const SHOWCASE_LISTS = ['columns', 'notes'];
+export const listsFor = (prefix) => (prefix === SHOWCASE_PREFIX ? SHOWCASE_LISTS : TABS);
+
 // Лимиты. Redis на бесплатном плане — 30 МБ, поэтому и состояние, и история
 // ограничены по объёму, иначе одна карточка с фотографией съест всю базу.
 const MAX_STATE_BYTES = 3_500_000;
@@ -41,10 +49,10 @@ const HISTORY_MAX_ENTRIES = 40;
 const HISTORY_MAX_BYTES = 700_000;
 const HISTORY_ENTRY_MAX_BYTES = 180_000;
 
-export function normalizeState(raw) {
+export function normalizeState(raw, lists = TABS) {
   const src = raw && typeof raw === 'object' ? raw : {};
   const out = {};
-  for (const tab of TABS) {
+  for (const tab of lists) {
     out[tab] = Array.isArray(src[tab]) ? src[tab].filter((c) => c && typeof c === 'object' && c.id) : [];
   }
   return out;
@@ -82,7 +90,7 @@ export async function loadDashboard(prefix) {
   }
   if (current && current.state) {
     return {
-      state: normalizeState(current.state),
+      state: normalizeState(current.state, listsFor(prefix)),
       rev: Number(current.rev) || 1,
       updatedAt: current.updatedAt || null,
       updatedBy: current.updatedBy || null,
@@ -131,7 +139,8 @@ async function migrateFromAppOption() {
 
 export async function saveDashboard({ prefix, state: incomingRaw, baseRev, author }) {
   if (!prefix) throw new Error('не указан инфоцентр для сохранения');
-  const incoming = normalizeState(incomingRaw);
+  const lists = listsFor(prefix);
+  const incoming = normalizeState(incomingRaw, lists);
   const serialized = JSON.stringify(incoming);
   if (serialized.length > MAX_STATE_BYTES) {
     const err = new Error(
@@ -143,7 +152,7 @@ export async function saveDashboard({ prefix, state: incomingRaw, baseRev, autho
 
   let current = await readJson(currentKey(prefix));
   if (!current && prefix === LEGACY_BOARD_ID) current = await readJson(LEGACY_CURRENT_KEY);
-  const prevState = current && current.state ? normalizeState(current.state) : null;
+  const prevState = current && current.state ? normalizeState(current.state, lists) : null;
   const currentRev = current ? Number(current.rev) || 0 : 0;
 
   let merged = incoming;
@@ -154,7 +163,7 @@ export async function saveDashboard({ prefix, state: incomingRaw, baseRev, autho
     // на актуальное состояние — иначе одна вкладка молча затирает другую.
     const base = await readJson(snapshotKey(prefix, Number(baseRev)));
     if (base && base.state) {
-      merged = threeWayMerge(normalizeState(base.state), incoming, prevState);
+      merged = threeWayMerge(normalizeState(base.state, lists), incoming, prevState, lists);
       mergedWith = currentRev;
     }
   }
@@ -168,7 +177,7 @@ export async function saveDashboard({ prefix, state: incomingRaw, baseRev, autho
   };
   await redisClient().set(currentKey(prefix), JSON.stringify(record));
   await writeSnapshot(prefix, nextRev, merged);
-  await recordHistory(prefix, prevState, merged, { rev: nextRev, at: record.updatedAt, by: author || null });
+  await recordHistory(prefix, prevState, merged, { rev: nextRev, at: record.updatedAt, by: author || null }, lists);
   if (prefix === LEGACY_BOARD_ID) await mirrorToAppOption(merged);
 
   return { rev: nextRev, updatedAt: record.updatedAt, state: merged, mergedWith };
@@ -202,9 +211,9 @@ async function mirrorToAppOption(state) {
 // Слияние правок двух вкладок
 // ---------------------------------------------------------------------------
 
-export function threeWayMerge(base, mine, theirs) {
+export function threeWayMerge(base, mine, theirs, lists = TABS) {
   const out = {};
-  for (const tab of TABS) {
+  for (const tab of lists) {
     out[tab] = mergeTab(base[tab] || [], mine[tab] || [], theirs[tab] || []);
   }
   return out;
@@ -252,9 +261,9 @@ function mergeTab(baseList, mineList, theirsList) {
 // История изменений по карточкам (таймлайн в интерфейсе)
 // ---------------------------------------------------------------------------
 
-export function diffCards(prevState, nextState) {
+export function diffCards(prevState, nextState, lists = TABS) {
   const changes = [];
-  for (const tab of TABS) {
+  for (const tab of lists) {
     const prevList = prevState ? prevState[tab] || [] : [];
     const nextList = nextState[tab] || [];
     const prevById = byId(prevList);
@@ -277,8 +286,22 @@ export function diffCards(prevState, nextState) {
   return changes;
 }
 
-async function recordHistory(prefix, prevState, nextState, meta) {
-  const changes = diffCards(prevState, nextState);
+// Версия для истории без тяжёлых встроенных данных: картинки карточки
+// «Изображение» и вложения стикеров, сохранённые прямо в данных (data:URL).
+// Файлы из хранилища (обычные ссылки) остаются — они ничего не весят.
+function lightweightCopy(card) {
+  const out = { ...card };
+  if (typeof out.imageUrl === 'string') out.imageUrl = '';
+  if (Array.isArray(out.attachments)) {
+    out.attachments = out.attachments.map((a) =>
+      a && typeof a.url === 'string' && a.url.startsWith('data:') ? { ...a, url: '' } : a
+    );
+  }
+  return out;
+}
+
+async function recordHistory(prefix, prevState, nextState, meta, lists = TABS) {
+  const changes = diffCards(prevState, nextState, lists);
   if (!changes.length) return;
 
   const redis = redisClient();
@@ -294,7 +317,7 @@ async function recordHistory(prefix, prevState, nextState, meta) {
     if (payload.length > HISTORY_ENTRY_MAX_BYTES) {
       // Карточка с тяжёлой картинкой: в истории храним всё, кроме самого
       // изображения — иначе таймлайн одной карточки выест всю базу.
-      payload = JSON.stringify({ ...entry, card: { ...change.card, imageUrl: '' }, trimmed: true });
+      payload = JSON.stringify({ ...entry, card: lightweightCopy(change.card), trimmed: true });
     }
     const key = cardHistoryKey(prefix, change.tab, change.cardId);
     try {

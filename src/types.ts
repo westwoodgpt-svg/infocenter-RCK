@@ -229,3 +229,60 @@ export const CHART_TYPE_LABELS: Record<ChartType, string> = {
   area: 'С областями',
   pie: 'Круговой',
 };
+
+// ---------------------------------------------------------------------------
+// Витрина — общий для всех отделов экран со стикерами
+// ---------------------------------------------------------------------------
+
+export type NoteColor = 'yellow' | 'pink' | 'green' | 'blue' | 'violet' | 'orange' | 'gray';
+
+export interface NoteAttachment {
+  id: string;
+  name: string;
+  /** Ссылка на файл в хранилище (Vercel Blob) или data:URL, если хранилище не подключено. */
+  url: string;
+  size: number;
+  contentType: string;
+}
+
+export interface ShowcaseNote {
+  id: string;
+  /** Колонка, в которой лежит стикер. Порядок стикеров — порядок в массиве notes. */
+  columnId: string;
+  color: NoteColor;
+  /** Заголовок в цветной полосе сверху. Необязателен. */
+  title?: string;
+  text: string;
+  /** Закреплённые стикеры идут первыми в своей колонке. */
+  pinned?: boolean;
+  /** "YYYY-MM-DD": после этой даты стикер уходит с витрины (в режиме редактирования виден приглушённым). */
+  expiresAt?: string;
+  /** Размер стикера в пикселях. Отсутствие значения — по умолчанию / по содержимому. */
+  width?: number;
+  height?: number;
+  attachments?: NoteAttachment[];
+}
+
+export interface ShowcaseColumn {
+  id: string;
+  title: string;
+  /** Ширина колонки в пикселях. Отсутствие значения — ширина по умолчанию. */
+  width?: number;
+}
+
+/** Колонки и стикеры хранятся плоскими списками: так их можно сливать и вести
+ *  историю по тем же правилам, что и карточки инфоцентров (см. api/_store.js). */
+export interface ShowcaseState {
+  columns: ShowcaseColumn[];
+  notes: ShowcaseNote[];
+}
+
+export const NOTE_COLOR_LABELS: Record<NoteColor, string> = {
+  yellow: 'Жёлтый',
+  pink: 'Розовый',
+  green: 'Зелёный',
+  blue: 'Голубой',
+  violet: 'Сиреневый',
+  orange: 'Оранжевый',
+  gray: 'Серый',
+};

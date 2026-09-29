@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { Building2, Check, ChevronDown, Eye, LayoutGrid, Pencil } from 'lucide-react';
+import { Building2, Check, ChevronDown, Eye, LayoutDashboard, LayoutGrid, Pencil } from 'lucide-react';
 import { BoardInfo, ROLE_LABELS, UserRole } from '../types';
 
 interface Props {
@@ -8,9 +8,11 @@ interface Props {
   activeBoardId: string;
   role: UserRole;
   summaryOpen: boolean;
+  showcaseOpen: boolean;
   canSeeSummary: boolean;
   onSelect: (boardId: string) => void;
   onOpenSummary: () => void;
+  onOpenShowcase: () => void;
 }
 
 export default function BoardSwitcher({
@@ -18,9 +20,11 @@ export default function BoardSwitcher({
   activeBoardId,
   role,
   summaryOpen,
+  showcaseOpen,
   canSeeSummary,
   onSelect,
   onOpenSummary,
+  onOpenShowcase,
 }: Props) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -35,18 +39,8 @@ export default function BoardSwitcher({
   }, [open]);
 
   const active = boards.find((b) => b.id === activeBoardId);
-  const label = summaryOpen ? 'Сводный экран' : active ? active.title : 'Инфоцентр';
-  // Одному отделу переключатель не нужен — показываем просто название.
-  const single = boards.length <= 1 && !canSeeSummary;
-
-  if (single) {
-    return (
-      <span className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#161619] border border-[#27272a] text-zinc-300">
-        <Building2 className="w-3.5 h-3.5 text-indigo-400" />
-        {label}
-      </span>
-    );
-  }
+  const label = showcaseOpen ? 'Витрина' : summaryOpen ? 'Сводный экран' : active ? active.title : 'Инфоцентр';
+  const onBoard = !summaryOpen && !showcaseOpen;
 
   return (
     <div className="relative" ref={rootRef}>
@@ -55,7 +49,9 @@ export default function BoardSwitcher({
         title="Выбрать инфоцентр отдела"
         className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-zinc-800/60 border border-zinc-700/60 text-zinc-200 hover:text-white transition-colors max-w-[240px]"
       >
-        {summaryOpen ? (
+        {showcaseOpen ? (
+          <LayoutDashboard className="w-3.5 h-3.5 text-indigo-400" />
+        ) : summaryOpen ? (
           <LayoutGrid className="w-3.5 h-3.5 text-indigo-400" />
         ) : (
           <Building2 className="w-3.5 h-3.5 text-indigo-400" />
@@ -74,6 +70,24 @@ export default function BoardSwitcher({
             {ROLE_LABELS[role]} · инфоцентров: {boards.length}
           </p>
 
+          {/* Витрина — общая для всех отделов, поэтому всегда первой в списке. */}
+          <button
+            onClick={() => {
+              onOpenShowcase();
+              setOpen(false);
+            }}
+            className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-sm transition-colors border-b border-[#1f1f23] ${
+              showcaseOpen ? 'text-indigo-300 bg-indigo-500/10' : 'text-zinc-200 hover:bg-zinc-800/60'
+            }`}
+          >
+            <LayoutDashboard className="w-4 h-4 text-indigo-400" />
+            <span className="flex-1 text-left">
+              Витрина
+              <span className="block text-[10px] text-[#71717a]">общая информация для всех отделов</span>
+            </span>
+            {showcaseOpen && <Check className="w-3.5 h-3.5" />}
+          </button>
+
           {canSeeSummary && (
             <button
               onClick={() => {
@@ -91,7 +105,7 @@ export default function BoardSwitcher({
           )}
 
           {boards.map((board) => {
-            const isActive = !summaryOpen && board.id === activeBoardId;
+            const isActive = onBoard && board.id === activeBoardId;
             return (
               <button
                 key={board.id}

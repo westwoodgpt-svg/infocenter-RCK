@@ -24,6 +24,7 @@ import {
   History,
   Eye as EyeIcon,
   Info as InfoIcon,
+  LayoutDashboard,
 } from 'lucide-react';
 
 import { TabId, DashboardState, AnyCard } from './types';
@@ -31,6 +32,8 @@ import { useDashboardStore } from './store';
 import TabBoard from './components/TabBoard';
 import BoardSwitcher from './components/BoardSwitcher';
 import SummaryBoard from './components/SummaryBoard';
+import ShowcaseBoard from './components/showcase/ShowcaseBoard';
+import { useShowcaseStore } from './showcaseStore';
 import logoHeader from './assets/logo-header.svg';
 
 export default function App() {
@@ -38,6 +41,9 @@ export default function App() {
   const [editMode, setEditMode] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  // Витрина — общий для всех отделов экран со стикерами. При входе не
+  // открывается сама: сотрудник попадает в инфоцентр своего отдела.
+  const [showcaseOpen, setShowcaseOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const {
     state,
@@ -72,16 +78,23 @@ export default function App() {
     saveSummaryConfig,
   } = useDashboardStore();
   const isShared = syncMode === 'bitrix';
+  const showcase = useShowcaseStore(syncMode, showcaseOpen);
+  // Статус синхронизации в шапке — того экрана, что сейчас открыт.
+  const shownStatus = showcaseOpen ? showcase.status : syncStatus;
+  const shownError = showcaseOpen ? showcase.error : syncError;
+  const shownSyncedAt = showcaseOpen ? showcase.lastSyncedAt : lastSyncedAt;
 
   // Право на правку зависит от инфоцентра: свой отдел — правим, вышестоящий —
   // только смотрим. Переключились на чужой — режим редактирования выключаем.
+  // Витрину правят все сотрудники, поэтому на ней режим не сбрасываем.
   useEffect(() => {
-    if (!canEdit && editMode) setEditMode(false);
-  }, [canEdit, editMode]);
+    if (!showcaseOpen && !canEdit && editMode) setEditMode(false);
+  }, [canEdit, editMode, showcaseOpen]);
 
   // Логотип РЦК — только на инфоцентре РЦК. У остальных отделов в шапке
   // название их отдела без чужого бренда.
-  const isRckBoard = !summaryOpen && activeBoardId === legacyBoardId;
+  const isRckBoard = !summaryOpen && !showcaseOpen && activeBoardId === legacyBoardId;
+  const onBoard = !summaryOpen && !showcaseOpen;
 
   const openBoardFromSummary = (boardId: string) => {
     setSummaryOpen(false);
@@ -90,7 +103,18 @@ export default function App() {
 
   const selectBoard = (boardId: string) => {
     setSummaryOpen(false);
+    setShowcaseOpen(false);
     void switchBoard(boardId);
+  };
+
+  const openSummary = () => {
+    setShowcaseOpen(false);
+    setSummaryOpen(true);
+  };
+
+  const openShowcase = () => {
+    setSummaryOpen(false);
+    setShowcaseOpen(true);
   };
 
   const formattedToday = useMemo(() => {
@@ -175,9 +199,9 @@ export default function App() {
             <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-white font-display flex flex-wrap items-center gap-x-3 gap-y-1.5">
               Инфоцентр
               {isRckBoard && <img src={logoHeader} alt="РЦК" className="h-6 md:h-7 w-auto" />}
-              {!isRckBoard && (activeBoard || summaryOpen) && (
+              {!isRckBoard && (activeBoard || !onBoard) && (
                 <span className="text-lg md:text-xl font-bold text-[#a1a1aa]">
-                  · {summaryOpen ? 'сводный экран' : activeBoard!.title}
+                  · {showcaseOpen ? 'витрина' : summaryOpen ? 'сводный экран' : activeBoard!.title}
                 </span>
               )}
             </h1>
@@ -186,13 +210,19 @@ export default function App() {
                 <Clock className="w-3.5 h-3.5 text-indigo-400" />
                 <span>Сегодня: <span className="text-white">{formattedToday}</span></span>
               </span>
-              {!summaryOpen && (
+              {onBoard && (
                 <span className="flex items-center gap-1.5 bg-[#161619] px-3 py-1 rounded-full border border-[#27272a]">
                   <CheckCircle2 className="w-3.5 h-3.5 text-indigo-400" />
                   <span>Карточек всего: <span className="text-white">{totalCards}</span></span>
                 </span>
               )}
-              {isShared && !summaryOpen && activeBoard && !activeBoard.canEdit && (
+              {showcaseOpen && (
+                <span className="flex items-center gap-1.5 bg-[#161619] px-3 py-1 rounded-full border border-[#27272a]">
+                  <LayoutDashboard className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Общая для всех отделов · стикеров: <span className="text-white">{showcase.state.notes.length}</span></span>
+                </span>
+              )}
+              {isShared && onBoard && activeBoard && !activeBoard.canEdit && (
                 <span className="flex items-center gap-1.5 bg-[#161619] px-3 py-1 rounded-full border border-[#27272a] text-[#a1a1aa]">
                   <EyeIcon className="w-3.5 h-3.5 text-zinc-500" />
                   <span>Только просмотр — это инфоцентр другого отдела</span>
@@ -202,24 +232,24 @@ export default function App() {
                 <span
                   className={`flex items-center gap-1.5 px-3 py-1 rounded-full border ${
                     isShared
-                      ? syncStatus === 'error'
+                      ? shownStatus === 'error'
                         ? 'bg-rose-500/10 border-rose-500/25 text-rose-300'
                         : 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300'
                       : 'bg-[#161619] border-[#27272a] text-[#a1a1aa]'
                   }`}
                 >
                   {isShared ? (
-                    syncStatus === 'error' ? <AlertTriangle className="w-3.5 h-3.5" /> : <Wifi className="w-3.5 h-3.5" />
+                    shownStatus === 'error' ? <AlertTriangle className="w-3.5 h-3.5" /> : <Wifi className="w-3.5 h-3.5" />
                   ) : (
                     <WifiOff className="w-3.5 h-3.5" />
                   )}
                   <span>
                     {isShared
-                      ? syncStatus === 'saving'
+                      ? shownStatus === 'saving'
                         ? 'Синхронизация с Битрикс24…'
-                        : syncStatus === 'error'
-                        ? `Не сохранилось в Битрикс24${syncError ? `: ${syncError}` : ''}`
-                        : `Общие данные Битрикс24${lastSyncedAt ? ` · ${lastSyncedAt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}` : ''}`
+                        : shownStatus === 'error'
+                        ? `Не сохранилось в Битрикс24${shownError ? `: ${shownError}` : ''}`
+                        : `Общие данные Битрикс24${shownSyncedAt ? ` · ${shownSyncedAt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}` : ''}`
                       : 'Автономный режим (только этот браузер)'}
                   </span>
                 </span>
@@ -228,28 +258,30 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2">
-            {isShared && (
+            {syncMode !== 'checking' && (
               <BoardSwitcher
                 boards={boards}
                 activeBoardId={activeBoardId}
                 role={role}
                 summaryOpen={summaryOpen}
+                showcaseOpen={showcaseOpen}
                 canSeeSummary={canSeeSummary}
                 onSelect={selectBoard}
-                onOpenSummary={() => setSummaryOpen(true)}
+                onOpenSummary={openSummary}
+                onOpenShowcase={openShowcase}
               />
             )}
             {isShared && !summaryOpen && (
               <button
-                onClick={refresh}
-                disabled={syncStatus === 'saving'}
+                onClick={showcaseOpen ? showcase.refresh : refresh}
+                disabled={shownStatus === 'saving'}
                 title="Подтянуть последние изменения от коллег"
                 className="p-2.5 rounded-xl bg-zinc-800/60 border border-zinc-700/60 text-zinc-300 hover:text-white transition-colors disabled:opacity-50"
               >
-                <RefreshCw className={`w-4 h-4 ${syncStatus === 'saving' ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`w-4 h-4 ${shownStatus === 'saving' ? 'animate-spin' : ''}`} />
               </button>
             )}
-            {canEdit && !summaryOpen && (
+            {(showcaseOpen || (canEdit && !summaryOpen)) && (
               <button
                 onClick={() => setEditMode((v) => !v)}
                 className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-colors ${
@@ -263,7 +295,7 @@ export default function App() {
               </button>
             )}
 
-            <div className={`relative ${canEdit && !summaryOpen ? '' : 'hidden'}`}>
+            <div className={`relative ${canEdit && onBoard ? '' : 'hidden'}`}>
               <button
                 onClick={() => setMenuOpen((v) => !v)}
                 className="p-2.5 rounded-xl bg-zinc-800/60 border border-zinc-700/60 text-zinc-300 hover:text-white transition-colors"
@@ -296,6 +328,7 @@ export default function App() {
           </div>
         </motion.header>
 
+        {!showcaseOpen && (
         <motion.nav
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -332,6 +365,7 @@ export default function App() {
             })}
           </div>
         </motion.nav>
+        )}
 
         {accessWarning && (
           <motion.div
@@ -344,7 +378,7 @@ export default function App() {
           </motion.div>
         )}
 
-        {unsyncedLocal && (
+        {unsyncedLocal && !showcaseOpen && (
           <motion.div
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -387,7 +421,7 @@ export default function App() {
           </motion.div>
         )}
 
-        {isShared && syncStatus === 'error' && (
+        {isShared && shownStatus === 'error' && (
           <motion.div
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -396,7 +430,7 @@ export default function App() {
             <AlertTriangle className="w-5 h-5 text-rose-400 flex-shrink-0 mt-0.5" />
             <div className="text-xs text-rose-200/90 leading-relaxed">
               <p className="font-semibold text-rose-300">
-                Не удалось сохранить изменения в Битрикс24{syncError ? `: ${syncError}` : ''}.
+                Не удалось сохранить изменения в Битрикс24{shownError ? `: ${shownError}` : ''}.
               </p>
               <p className="mt-1 text-rose-200/70">
                 Показаны последние известные данные. Попробуйте нажать «Обновить» — если ошибка повторится,
@@ -407,7 +441,17 @@ export default function App() {
         )}
 
         <main className="min-h-[400px]">
-          {summaryOpen ? (
+          {showcaseOpen ? (
+            <motion.div key="showcase" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
+              <ShowcaseBoard
+                state={showcase.state}
+                editMode={editMode}
+                mutate={showcase.mutate}
+                uploads={isShared ? showcase.uploads : 'inline'}
+                loadNoteHistory={showcase.loadNoteHistory}
+              />
+            </motion.div>
+          ) : summaryOpen ? (
             <motion.div key={`summary-${activeTab}`} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
               <SummaryBoard
                 tab={activeTab}
@@ -466,6 +510,16 @@ export default function App() {
                 какие отделы и какие именно их карточки на него тянуть; настройка личная и хранится на портале.
               </p>
             )}
+            <p className="flex items-start gap-1.5">
+              <LayoutDashboard className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0 mt-0.5" />
+              <span>
+                «Витрина» (первый пункт переключателя в шапке) — общий экран для всех отделов: колонки-разделы со
+                стикерами. В режиме редактирования стикеры и колонки перетаскиваются мышью, размер стикера меняется
+                за правый нижний уголок, ширина колонки — за её правый край (двойной щелчок возвращает размер по
+                умолчанию). К стикеру можно приложить картинки и файлы, закрепить его первым в колонке и задать дату
+                «актуально до» — после неё стикер уходит с витрины.
+              </span>
+            </p>
             <p className="flex items-start gap-1.5">
               <History className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0 mt-0.5" />
               <span>

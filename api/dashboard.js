@@ -12,7 +12,9 @@ import {
   loadSummaryConfig,
   saveSummaryConfig,
   TABS,
+  SHOWCASE_PREFIX,
 } from './_store.js';
+import { blobConfigured } from './showcase-upload.js';
 
 // Сводный экран грузит несколько инфоцентров сразу, поэтому тяжёлые картинки в
 // нём не передаются — вместо них карточка помечается флагом.
@@ -194,6 +196,51 @@ export default async function handler(req, res) {
         })
       );
       res.status(200).json({ ok: true, tab, sections });
+      return;
+    }
+
+    // Витрина — один общий экран для всей компании. Смотрят все, правят тоже
+    // все сотрудники портала (через режим редактирования), поэтому здесь
+    // достаточно действующей сессии — права на отделы не проверяются.
+    if (action === 'showcase-load') {
+      const data = await loadDashboard(SHOWCASE_PREFIX);
+      res.status(200).json({
+        ok: true,
+        state: data ? data.state : null,
+        rev: data ? data.rev : 0,
+        updatedAt: data ? data.updatedAt : null,
+        updatedBy: data ? data.updatedBy : null,
+        // Куда класть вложения: в хранилище файлов Vercel Blob или (пока оно
+        // не подключено) прямо в данные витрины — тогда только небольшие файлы.
+        uploads: blobConfigured() ? 'blob' : 'inline',
+      });
+      return;
+    }
+
+    if (action === 'showcase-save') {
+      const { state, baseRev } = payload;
+      if (!state || typeof state !== 'object') {
+        res.status(400).json({ ok: false, error: 'отсутствует state' });
+        return;
+      }
+      const saved = await saveDashboard({
+        prefix: SHOWCASE_PREFIX,
+        state,
+        baseRev: baseRev == null ? null : Number(baseRev),
+        author: identity.name,
+      });
+      res.status(200).json({ ok: true, ...saved });
+      return;
+    }
+
+    if (action === 'showcase-history') {
+      const { noteId } = payload;
+      if (!noteId) {
+        res.status(400).json({ ok: false, error: 'нужен noteId' });
+        return;
+      }
+      const entries = await cardHistory(SHOWCASE_PREFIX, 'notes', String(noteId));
+      res.status(200).json({ ok: true, entries });
       return;
     }
 

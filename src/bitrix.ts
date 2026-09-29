@@ -1,4 +1,4 @@
-import { AnyCard, BootstrapInfo, DashboardState, SummaryConfig, SummarySection, TabId } from './types';
+import { AnyCard, BootstrapInfo, DashboardState, ShowcaseNote, ShowcaseState, SummaryConfig, SummarySection, TabId } from './types';
 
 // Общее хранилище дашборда на уровне приложения Битрикс24 (app.option) —
 // один и тот же ключ виден всем пользователям портала, установившим
@@ -134,7 +134,7 @@ export interface CardHistoryEntry {
   trimmed?: boolean;
 }
 
-function currentAuth(): Promise<BXAuth | null> {
+export function currentAuth(): Promise<BXAuth | null> {
   return new Promise((resolve) => {
     if (!hasBX24()) {
       resolve(null);
@@ -148,7 +148,7 @@ function currentAuth(): Promise<BXAuth | null> {
 // Токен, выданный порталом вкладке, живёт около часа. Если инфоцентр держат
 // открытым дольше, сервер отвечает 403 — тогда просим SDK обновить токен и
 // повторяем запрос один раз, чтобы сохранение не «отваливалось» само по себе.
-function refreshAuth(): Promise<BXAuth | null> {
+export function refreshAuth(): Promise<BXAuth | null> {
   return new Promise((resolve) => {
     const bx = window.BX24;
     if (!bx || typeof bx.refreshAuth !== 'function') {
@@ -334,6 +334,67 @@ export async function saveSummaryConfigRemote(
   });
   if (error) return { config: null, error };
   return { config: data!.config, error: null };
+}
+
+
+// ---------------------------------------------------------------------------
+// Витрина: общий экран со стикерами для всех отделов
+// ---------------------------------------------------------------------------
+
+export type ShowcaseUploads = 'blob' | 'inline';
+
+export interface RemoteShowcase {
+  state: ShowcaseState | null;
+  rev: number;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  uploads: ShowcaseUploads;
+}
+
+export interface NoteHistoryEntry {
+  rev?: number;
+  at: string;
+  by: string | null;
+  action: 'create' | 'update' | 'delete';
+  card: ShowcaseNote;
+  trimmed?: boolean;
+}
+
+export async function loadShowcaseRemote(): Promise<{ data: RemoteShowcase | null; error: string | null }> {
+  const { data, error } = await postDashboardApi<ApiResponse & RemoteShowcase>({ action: 'showcase-load' });
+  if (error || !data) return { data: null, error };
+  return {
+    data: {
+      state: data.state,
+      rev: data.rev,
+      updatedAt: data.updatedAt,
+      updatedBy: data.updatedBy,
+      uploads: data.uploads === 'blob' ? 'blob' : 'inline',
+    },
+    error: null,
+  };
+}
+
+export async function saveShowcaseRemote(
+  state: ShowcaseState,
+  baseRev: number
+): Promise<{ ok: boolean; rev: number | null; state: ShowcaseState | null; error: string | null }> {
+  const { data, error } = await postDashboardApi<ApiResponse & { rev: number; state: ShowcaseState }>({
+    action: 'showcase-save',
+    state,
+    baseRev,
+  });
+  if (error) return { ok: false, rev: null, state: null, error };
+  return { ok: true, rev: data!.rev, state: data!.state, error: null };
+}
+
+export async function fetchNoteHistoryRemote(noteId: string): Promise<{ entries: NoteHistoryEntry[]; error: string | null }> {
+  const { data, error } = await postDashboardApi<ApiResponse & { entries: NoteHistoryEntry[] }>({
+    action: 'showcase-history',
+    noteId,
+  });
+  if (error) return { entries: [], error };
+  return { entries: data!.entries || [], error: null };
 }
 
 
