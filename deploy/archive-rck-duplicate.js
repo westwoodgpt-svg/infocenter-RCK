@@ -14,14 +14,18 @@
 //   set -a; . /etc/infocenter-rck.env; set +a
 //   node deploy/archive-rck-duplicate.js            # только отчёт
 //   node deploy/archive-rck-duplicate.js --apply    # отчёт + архивация
-// Отдел — INFOCENTER_RCK_DEPARTMENT_ID или --dept=<id> (по умолчанию 115).
+// Отдел — INFOCENTER_RCK_DEPARTMENT_ID из /etc/infocenter-rck.env или --dept=<id>.
 import Redis from 'ioredis';
 import { writeFile } from 'node:fs/promises';
 
 const TABS = ['security', 'quality', 'production', 'costs', 'personnel'];
 const apply = process.argv.includes('--apply');
 const deptArg = process.argv.find((a) => a.startsWith('--dept='));
-const dept = (deptArg ? deptArg.slice(7) : process.env.INFOCENTER_RCK_DEPARTMENT_ID || '115').trim();
+const dept = (deptArg ? deptArg.slice(7) : process.env.INFOCENTER_RCK_DEPARTMENT_ID || '').trim();
+if (!/^\d+$/.test(dept)) {
+  console.error('Не задан отдел РЦК: впишите INFOCENTER_RCK_DEPARTMENT_ID в /etc/infocenter-rck.env или передайте --dept=<id>.');
+  process.exit(1);
+}
 const date = new Date().toISOString().slice(0, 10);
 
 if (!process.env.REDIS_URL) {

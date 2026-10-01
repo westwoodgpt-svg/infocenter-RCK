@@ -177,8 +177,13 @@ DOMAIN=infocenter.2.27.10.126.nip.io BRANCH=<ветка> bash /opt/infocenter-rc
 
 ## Дубль «Инфоцентра РЦК» (dept-115)
 
+Номер отдела РЦК задаётся в `/etc/infocenter-rck.env`:
+`INFOCENTER_RCK_DEPARTMENT_ID=115`. Если структуру отделов на портале
+перестроят и номер сменится, поменяйте его там и выполните
+`systemctl restart infocenter-rck` — код править не нужно.
+
 Из приложения дубль убран кодом. В Redis он остаётся, пока его не
-перенести в архив:
+перенести в архив (скрипт берёт номер отдела из того же файла):
 
 ```bash
 cd /opt/infocenter-rck && set -a && . /etc/infocenter-rck.env && set +a
@@ -192,6 +197,56 @@ node deploy/archive-rck-duplicate.js --apply    # отчёт + перенос в
 ключи дубля (данные, снимки, история карточек) в
 `rck:archive:dept-115:<дата>:*` — ничего не удаляется, команда возврата
 печатается в конце.
+
+## Выкладка ветки claude/start-view-single-rck (02.10.2026)
+
+1. Резервная копия Redis:
+   ```bash
+   redis-cli SAVE && cp /var/lib/redis/dump.rdb /root/redis-before-start-view-$(date +%F).rdb
+   ```
+2. Номер отдела РЦК: впишите в `/etc/infocenter-rck.env` строку
+   `INFOCENTER_RCK_DEPARTMENT_ID=115`.
+3. Код (`update.sh` на сервере ещё нет, поэтому первый раз вручную):
+   ```bash
+   cd /opt/infocenter-rck && git fetch origin claude/start-view-single-rck \
+     && git checkout -B claude/start-view-single-rck origin/claude/start-view-single-rck \
+     && npm ci && npm run build && systemctl restart infocenter-rck
+   ```
+4. Отчёт по дублю, без `--apply`:
+   ```bash
+   cd /opt/infocenter-rck && set -a && . /etc/infocenter-rck.env && set +a
+   node deploy/archive-rck-duplicate.js
+   ```
+   Если в группе «только в дубле» что-то есть — остановиться и разобрать.
+5. Только после этого: `node deploy/archive-rck-duplicate.js --apply`.
+6. Проверка — `https://infocenter.2.27.10.126.nip.io/api/bitrix-status`:
+   - `rckDepartment` — отдел 115, `board: "rck"`;
+   - `storedBoards` — `rck`, `showcase`, `dept-117`, `dept-141`; `dept-115`
+     после шага 5 там нет;
+   - `departmentsWithoutData` — все отделы портала, кроме 117 и 141 (у них
+     свой инфоцентр с карточками) и кроме 115 (РЦК: его данные в `rck`).
+     Ни 115, ни 117, ни 141 в этом списке быть не должно.
+
+**Откат кода:**
+```bash
+cd /opt/infocenter-rck && git checkout e3c92d8 && npm ci && npm run build && systemctl restart infocenter-rck
+```
+После отката «Региональный центр компетенций…» снова появится отдельным
+инфоцентром. Если шаг 5 уже выполнен, он будет пустым: дубль в архиве.
+Вернуть его — командой, которую напечатал `--apply`.
+
+**Откат данных** из копии шага 1. Redis работает с `appendonly yes`, поэтому
+при запуске он читает журнал AOF, а не `dump.rdb`. Простое копирование файла
+обратно не сработает:
+```bash
+systemctl stop infocenter-rck redis-server
+mv /var/lib/redis/appendonlydir /root/appendonlydir-broken-$(date +%F-%H%M)
+cp /root/redis-before-start-view-<дата>.rdb /var/lib/redis/dump.rdb && chown redis:redis /var/lib/redis/dump.rdb
+sed -i -E 's/^appendonly .*/appendonly no/' /etc/redis/redis.conf && systemctl start redis-server
+redis-cli CONFIG SET appendonly yes   # Redis сам заново соберёт AOF из загруженных данных
+sed -i -E 's/^appendonly .*/appendonly yes/' /etc/redis/redis.conf
+systemctl start infocenter-rck
+```
 
 ## Резервные копии
 

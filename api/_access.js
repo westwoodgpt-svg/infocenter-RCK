@@ -267,10 +267,16 @@ export async function resolveAccess(identity) {
       canEdit: editable.has(d.id),
     }));
 
-  // Пока исторический инфоцентр РЦК не привязан к отделу, он остаётся общим и
-  // доступным всем — иначе уже внесённые данные оказались бы никому не видны.
-  // Для сотрудников отдела РЦК это их собственный инфоцентр.
-  if (!legacyDept) boards.unshift(legacyBoard(true, rckDept ? rckDept.id : null));
+  // «Инфоцентр РЦК» видят все. Правят — по тем же правилам, что инфоцентр
+  // отдела РЦК: его сотрудники, его руководитель (и руководители вышестоящих
+  // отделов, в том числе директор), администраторы портала и
+  // INFOCENTER_DIRECTOR_IDS. Остальным — только просмотр. Если отдел РЦК на
+  // портале не найден, правило применить не к чему, и инфоцентр, как раньше,
+  // правят все.
+  if (!legacyDept) {
+    const canEditRck = rckDept ? editable.has(rckDept.id) : true;
+    boards.unshift(legacyBoard(canEditRck, rckDept ? rckDept.id : null));
+  }
   const inRck = Boolean(rckDept && own.has(rckDept.id));
 
   let role = 'employee';
