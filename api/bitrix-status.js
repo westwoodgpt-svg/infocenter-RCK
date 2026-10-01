@@ -3,7 +3,16 @@
 // https://infocenter-rck.vercel.app/api/bitrix-status
 import { peekServiceToken, peekLastOpenAttempt } from './_bitrixAuth.js';
 import { peekDashboard, listStoredBoards } from './_store.js';
-import { getDepartmentTree, departmentTreeError, LEGACY_BOARD_ID, storagePrefixFor, boardIdForDepartment } from './_access.js';
+import {
+  getDepartmentTree,
+  departmentTreeError,
+  LEGACY_BOARD_ID,
+  LEGACY_BOARD_TITLE,
+  storagePrefixFor,
+  boardIdForDepartment,
+  findRckDepartment,
+} from './_access.js';
+import { peekClientLog } from './client-log.js';
 import { peekLegacyCopy } from './_seedCopy.js';
 
 export default async function handler(req, res) {
@@ -44,15 +53,17 @@ export default async function handler(req, res) {
     // здесь нет, на сервер ни разу ничего не сохранял.
     const stored = await listStoredBoards().catch(() => []);
     const deptByPrefix = new Map((departments || []).map((d) => [storagePrefixFor(boardIdForDepartment(d.id)), d.name]));
+    // Отдел РЦК работает в «Инфоцентре РЦК» (ключи rck) — его данные там.
+    const rckDept = process.env.INFOCENTER_LEGACY_DEPARTMENT_ID ? null : findRckDepartment(departments);
+    const prefixOfDept = (d) => (rckDept && d.id === rckDept.id ? LEGACY_BOARD_ID : storagePrefixFor(boardIdForDepartment(d.id)));
     const storedBoards = stored.map((b) => ({
       ...b,
-      department: b.prefix === 'showcase' ? 'Витрина' : b.prefix === LEGACY_BOARD_ID ? 'РЦК (общий)' : deptByPrefix.get(b.prefix) || null,
+      department: b.prefix === 'showcase' ? 'Витрина' : b.prefix === LEGACY_BOARD_ID ? LEGACY_BOARD_TITLE : deptByPrefix.get(b.prefix) || null,
     }));
     const departmentsWithoutData = departments
-      ? departments
-          .filter((d) => !stored.some((b) => b.prefix === storagePrefixFor(boardIdForDepartment(d.id))))
-          .map((d) => d.name)
+      ? departments.filter((d) => !stored.some((b) => b.prefix === prefixOfDept(d))).map((d) => d.name)
       : null;
+    const clientLog = await peekClientLog().catch(() => null);
     res.status(200).json({
       ok: true,
       deployedCommit,
@@ -68,6 +79,8 @@ export default async function handler(req, res) {
       legacyCopy,
       storedBoards,
       departmentsWithoutData,
+      rckDepartment: rckDept ? { id: rckDept.id, name: rckDept.name, board: LEGACY_BOARD_ID } : null,
+      clientLog,
       legacyDepartmentId: process.env.INFOCENTER_LEGACY_DEPARTMENT_ID || null,
       hiddenDepartments: process.env.INFOCENTER_HIDDEN_DEPARTMENTS || null,
       serviceToken: token

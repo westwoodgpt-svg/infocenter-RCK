@@ -3,14 +3,16 @@
 // Каждый отдел — свой инфоцентр. Какие из них доступны открывшему сотруднику и
 // что он может в них делать, решает сервер по данным Битрикс24 (api/_access.js);
 // идентификатор инфоцентра из запроса всегда проверяется по этому списку.
-import { boardAccess, resolveAccess, resolveIdentity, storagePrefixFor } from './_access.js';
-import { ensureLegacyCopy } from './_seedCopy.js';
+import { boardAccess, LEGACY_BOARD_ID, resolveAccess, resolveIdentity, storagePrefixFor } from './_access.js';
 import {
   loadDashboard,
   saveDashboard,
   cardHistory,
   loadSummaryConfig,
   saveSummaryConfig,
+  loadLastView,
+  saveLastView,
+  normalizeView,
   TABS,
   SHOWCASE_PREFIX,
 } from './_store.js';
@@ -39,6 +41,18 @@ function lightenCard(card) {
     return { ...card, imageUrl: '', summaryTrimmed: true };
   }
   return card;
+}
+
+// Сохранённый вид — только если он сотруднику всё ещё доступен. Прежний
+// инфоцентр отдела РЦК открывает «Инфоцентр РЦК». Иначе null — тогда клиент
+// откроет витрину.
+function resolveLastView(view, access) {
+  const v = normalizeView(view);
+  if (!v) return null;
+  if (v.kind === 'showcase') return v;
+  if (v.kind === 'summary') return access.canSeeSummary ? v : null;
+  const boardId = access.rckAliasBoardId && v.boardId === access.rckAliasBoardId ? LEGACY_BOARD_ID : v.boardId;
+  return access.boards.some((b) => b.id === boardId) ? { kind: 'board', boardId } : null;
 }
 
 export default async function handler(req, res) {
@@ -70,11 +84,10 @@ export default async function handler(req, res) {
     const access = await resolveAccess(identity);
 
     if (action === 'bootstrap') {
-      // Разовая копия инфоцентра РЦК отделу-получателю (см. api/_seedCopy.js).
-      // Выполняется один раз за всё время и не трогает инфоцентр, в котором уже
-      // есть карточки, поэтому на обычную работу и правки не влияет.
-      await ensureLegacyCopy();
+      // Последний вид отдаём сразу здесь, чтобы при входе не было лишнего запроса.
+      const lastView = resolveLastView(await loadLastView(identity.id).catch(() => null), access);
       res.status(200).json({
+        lastView,
         ok: true,
         me: { id: identity.id, name: identity.name, isAdmin: identity.isAdmin },
         role: access.role,
@@ -140,6 +153,17 @@ export default async function handler(req, res) {
       }
       const entries = await cardHistory(storagePrefixFor(board.id), tab, String(cardId));
       res.status(200).json({ ok: true, entries });
+      return;
+    }
+
+    if (action === 'last-view-save') {
+      const view = resolveLastView(payload.view, access);
+      if (!view) {
+        res.status(400).json({ ok: false, error: 'этот вид недоступен' });
+        return;
+      }
+      await saveLastView(identity.id, view);
+      res.status(200).json({ ok: true, view });
       return;
     }
 

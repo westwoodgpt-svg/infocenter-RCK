@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AnyCard,
+  AppView,
   BoardInfo,
   BootstrapInfo,
   DashboardState,
@@ -21,6 +22,8 @@ import {
   isInIframe,
   LEGACY_BOARD_ID,
   loadBx24Sdk,
+  reportLaunch,
+  saveLastViewRemote,
   loadDashboardRemote,
   saveDashboardRemote,
   saveSummaryConfigRemote,
@@ -34,6 +37,9 @@ const CACHE_PREFIX = 'rck-dashboard-v2:';
 // живут исторические данные РЦК.
 const LEGACY_CACHE_KEY = 'rck-dashboard-v1';
 const ACTIVE_BOARD_KEY = 'rck-active-board';
+// Быстрая копия последнего вида; источник истины — сервер (rck:last-view:<id>).
+const LAST_VIEW_KEY = 'rck-last-view';
+const VIEW_SAVE_DEBOUNCE_MS = 1000;
 // Настройка сводного экрана хранится на портале (она личная и должна ездить за
 // руководителем), а в браузере остаётся копия — на случай недоступности сервера.
 const SUMMARY_CONFIG_KEY = 'rck-summary-config';
@@ -133,6 +139,14 @@ function adoptLegacyCache(boardId: string) {
   }
 }
 
+function writeLastViewCache(view: AppView) {
+  try {
+    localStorage.setItem(LAST_VIEW_KEY, JSON.stringify(view));
+  } catch {
+    // не критично
+  }
+}
+
 let counter = 0;
 export function newCardId() {
   counter += 1;
@@ -186,6 +200,10 @@ export function useDashboardStore() {
   // Тогда правка запрещена: иначе она осталась бы только в этом браузере.
   const [portalError, setPortalError] = useState<string | null>(null);
   const [localLeftovers, setLocalLeftovers] = useState<LocalLeftovers | null>(null);
+  // Что показать при входе. null — ещё не решено (показываем экран загрузки,
+  // чтобы не мигало «инфоцентр → витрина»).
+  const [startView, setStartView] = useState<AppView | null>(null);
+  const viewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Синхронизация живёт на ref-ах: таймеры и обработчики должны видеть
   // актуальные значения, а не те, что были на момент их создания.
@@ -441,24 +459,36 @@ export function useDashboardStore() {
         dirtyRef.current = cache.dirty;
         savedAtRef.current = cache.savedAt;
         setStateRaw(cache.state);
+        // В автономном режиме витрины на портале нет — всё как раньше.
+        setStartView({ kind: 'board', boardId: LOCAL_BOARD_ID });
       };
 
       if (!isInIframe()) {
         startLocal();
         return;
       }
-      const sdkError = await loadBx24Sdk();
+      const startedAt = performance.now();
+      const sdk = await loadBx24Sdk();
       if (cancelled) return;
-      const ready = !sdkError && (await bx24Init());
+      const ready = !sdk.error && (await bx24Init());
       if (cancelled) return;
+      const initMs = performance.now() - startedAt;
       if (!ready) {
-        startLocal(sdkError || 'Битрикс24 не ответил на подключение приложения');
+        const failure = sdk.error || 'Битрикс24 не ответил на подключение приложения';
+        reportLaunch({ outcome: sdk.error ? 'no-sdk' : 'init-timeout', sdkSource: sdk.source, initMs, error: failure });
+        startLocal(failure);
         return;
       }
 
       setSyncStatus('saving');
       const { data: info, error } = await bootstrapRemote();
       if (cancelled) return;
+      reportLaunch({
+        outcome: error || !info ? 'bootstrap-error' : 'bitrix',
+        sdkSource: sdk.source,
+        initMs,
+        error: error || null,
+      });
 
       if (error || !info) {
         // Список инфоцентров получить не удалось (Redis, права, сеть). Не
@@ -471,7 +501,9 @@ export function useDashboardStore() {
         legacyBoardRef.current = LEGACY_BOARD_ID;
         setLegacyBoardId(LEGACY_BOARD_ID);
         adoptLegacyCache(LEGACY_BOARD_ID);
-        await openBoard(LEGACY_BOARD_ID);
+        const opening = openBoard(LEGACY_BOARD_ID);
+        setStartView({ kind: 'board', boardId: LEGACY_BOARD_ID });
+        await opening;
         return;
       }
 
@@ -492,16 +524,26 @@ export function useDashboardStore() {
       } catch {
         preferred = null;
       }
+      // При входе: то, что сотрудник открывал в прошлый раз (сервер уже
+      // проверил, что это ему доступно), а при первом входе — витрина.
+      const view: AppView = info.lastView || { kind: 'showcase' };
+      writeLastViewCache(view);
+      // Инфоцентр открываем и под витриной/сводным экраном — на него
+      // переключаются одним щелчком, и он должен быть уже загружен.
       const target =
+        (view.kind === 'board' && info.boards.some((b) => b.id === view.boardId) ? view.boardId : null) ||
         (preferred && info.boards.some((b) => b.id === preferred) ? preferred : null) ||
         info.defaultBoardId ||
         (info.boards[0] ? info.boards[0].id : null);
 
       if (!target) {
         setSyncStatus('idle');
+        setStartView(view.kind === 'board' ? { kind: 'showcase' } : view);
         return;
       }
-      await openBoard(target);
+      const opening = openBoard(target);
+      setStartView(view);
+      await opening;
       if (!cancelled) setLocalLeftovers(readLocalLeftovers());
     })();
     return () => {
@@ -667,6 +709,16 @@ export function useDashboardStore() {
     applyRemote(pending.remoteState, pending.remoteRev);
   }, [unsyncedLocal, applyRemote]);
 
+  // Запомнить, что открыто, — на портале под сотрудником (с задержкой: при
+  // быстрых переключениях уходит только последнее). Ошибки не показываем:
+  // в худшем случае при следующем входе откроется витрина.
+  const rememberView = useCallback((view: AppView) => {
+    if (modeRef.current !== 'bitrix') return;
+    writeLastViewCache(view);
+    if (viewTimerRef.current) clearTimeout(viewTimerRef.current);
+    viewTimerRef.current = setTimeout(() => void saveLastViewRemote(view), VIEW_SAVE_DEBOUNCE_MS);
+  }, []);
+
   const loadCardHistory = useCallback(
     async (tab: TabId, cardId: string): Promise<{ entries: CardHistoryEntry[]; error: string | null }> => {
       if (modeRef.current === 'bitrix') return fetchCardHistoryRemote(boardRef.current, tab, cardId);
@@ -735,6 +787,8 @@ export function useDashboardStore() {
     appendAll,
     loadCardHistory,
     portalError,
+    startView,
+    rememberView,
     localLeftovers,
     adoptLocalLeftovers,
     dismissLocalLeftovers,

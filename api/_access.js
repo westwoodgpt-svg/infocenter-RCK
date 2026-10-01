@@ -23,7 +23,31 @@ const MAX_DEPT_PAGES = 20;
 
 /** Инфоцентр РЦК, существовавший до разделения по отделам. */
 export const LEGACY_BOARD_ID = 'rck';
-const LEGACY_BOARD_TITLE = 'РЦК';
+export const LEGACY_BOARD_TITLE = 'Инфоцентр РЦК';
+
+// Отдел портала, который и есть РЦК («Региональный центр компетенций в сфере
+// производительности труда»). Своего инфоцентра отдела у него нет: его
+// сотрудники работают в «Инфоцентре РЦК» (ключи rck, данные и история на
+// месте). Ищется по INFOCENTER_RCK_DEPARTMENT_ID, иначе по названию.
+const RCK_DEPARTMENT_NAME = 'Региональный центр компетенций в сфере производительности труда';
+
+// Названия отделов на портале пишут по-разному: регистр, «ё», кавычки, пробелы.
+export const normalizeDepartmentName = (value) =>
+  String(value || '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/[«»"'`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/** Отдел РЦК в структуре портала или null. */
+export function findRckDepartment(departments) {
+  if (!departments) return null;
+  const byId = String(process.env.INFOCENTER_RCK_DEPARTMENT_ID || '').trim();
+  if (byId) return departments.find((d) => d.id === byId) || null;
+  const wanted = normalizeDepartmentName(RCK_DEPARTMENT_NAME);
+  return departments.find((d) => normalizeDepartmentName(d.name) === wanted) || null;
+}
 
 const identityKey = (accessToken) => `rck:identity:${createHash('sha256').update(accessToken).digest('hex').slice(0, 32)}`;
 
@@ -176,8 +200,8 @@ export async function resolveIdentity({ accessToken, domain }) {
 // Доступные инфоцентры
 // ---------------------------------------------------------------------------
 
-function legacyBoard(canEdit = true) {
-  return { id: LEGACY_BOARD_ID, title: LEGACY_BOARD_TITLE, departmentId: null, canEdit };
+function legacyBoard(canEdit = true, departmentId = null) {
+  return { id: LEGACY_BOARD_ID, title: LEGACY_BOARD_TITLE, departmentId, canEdit };
 }
 
 // Запасной сценарий: структура отделов недоступна. Никого не запираем —
@@ -204,6 +228,9 @@ export async function resolveAccess(identity) {
   const children = childrenMap(departments);
   const hidden = hiddenDepartmentIds();
   const legacyDept = legacyDepartmentId();
+  // Отдел РЦК не получает своего инфоцентра — он работает в «Инфоцентре РЦК».
+  // (Если задан старый механизм INFOCENTER_LEGACY_DEPARTMENT_ID, работает он.)
+  const rckDept = legacyDept ? null : findRckDepartment(departments);
 
   const own = new Set(identity.departmentIds.filter((id) => byId.has(id)));
   const headOf = departments.filter((d) => d.headId && d.headId === identity.id).map((d) => d.id);
@@ -231,7 +258,7 @@ export async function resolveAccess(identity) {
   }
 
   const boards = departments
-    .filter((d) => viewable.has(d.id) && !hidden.has(d.id))
+    .filter((d) => viewable.has(d.id) && !hidden.has(d.id) && !(rckDept && d.id === rckDept.id))
     .sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'ru'))
     .map((d) => ({
       id: boardIdForDepartment(d.id),
@@ -242,7 +269,9 @@ export async function resolveAccess(identity) {
 
   // Пока исторический инфоцентр РЦК не привязан к отделу, он остаётся общим и
   // доступным всем — иначе уже внесённые данные оказались бы никому не видны.
-  if (!legacyDept) boards.unshift(legacyBoard(true));
+  // Для сотрудников отдела РЦК это их собственный инфоцентр.
+  if (!legacyDept) boards.unshift(legacyBoard(true, rckDept ? rckDept.id : null));
+  const inRck = Boolean(rckDept && own.has(rckDept.id));
 
   let role = 'employee';
   if (identity.isAdmin) role = 'admin';
@@ -250,6 +279,7 @@ export async function resolveAccess(identity) {
   else if (headOf.length) role = 'head';
 
   const preferred =
+    (inRck ? boards.find((b) => b.id === LEGACY_BOARD_ID) : null) ||
     boards.find((b) => b.departmentId && own.has(b.departmentId) && b.canEdit) ||
     boards.find((b) => b.canEdit) ||
     boards[0] ||
@@ -263,6 +293,9 @@ export async function resolveAccess(identity) {
     // Где теперь живут исторические данные РЦК — по этому идентификатору клиент
     // переносит свой старый локальный кэш в нужный инфоцентр.
     legacyBoardId: legacyDept ? boardIdForDepartment(legacyDept) : LEGACY_BOARD_ID,
+    // Прежний id инфоцентра отдела РЦК: сохранённый «последний вид» с ним
+    // открывает «Инфоцентр РЦК» (см. resolveLastView в api/dashboard.js).
+    rckAliasBoardId: rckDept ? boardIdForDepartment(rckDept.id) : null,
     warning: null,
   };
 }

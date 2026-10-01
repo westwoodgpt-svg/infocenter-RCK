@@ -17,7 +17,8 @@
 
 Нужны Ubuntu 22.04/24.04 или Debian 12, доступ root, открытые порты 80 и 443
 и домен, который указывает на сервер (у хостинга он уже есть, например
-`vm1101304.hosted-by.u1host.com`).
+`infocenter.2.27.10.126.nip.io`; имя `vm1101304.hosted-by.u1host.com` в
+публичном DNS не существует, его не используйте).
 
 ## Переезд с Vercel по шагам
 
@@ -26,7 +27,7 @@
    ```bash
    BRANCH=main
    curl -fsSL "https://raw.githubusercontent.com/westwoodgpt-svg/infocenter-RCK/$BRANCH/deploy/install.sh" -o install.sh
-   DOMAIN=vm1101304.hosted-by.u1host.com BRANCH=$BRANCH bash install.sh
+   DOMAIN=infocenter.2.27.10.126.nip.io BRANCH=$BRANCH bash install.sh
    ```
 
    Скрипт поставит Node.js 22, Redis, nginx и certbot, соберёт приложение,
@@ -152,12 +153,45 @@
 
 ## Обновление кода
 
+Обычное обновление — **только код и перезапуск службы**:
+
 ```bash
-DOMAIN=vm1101304.hosted-by.u1host.com BRANCH=main bash /opt/infocenter-rck/deploy/install.sh
+BRANCH=<ветка> bash /opt/infocenter-rck/deploy/update.sh
 ```
 
-Повторный запуск забирает свежий код, пересобирает и перезапускает службу;
-настройки, данные, вложения и сертификат не трогаются.
+`update.sh` не трогает nginx, сертификат, Redis, systemd-юнит и
+`/etc/infocenter-rck.env`. Если в `/opt/infocenter-rck` есть правки файлов,
+сделанные прямо на сервере, он остановится и покажет их (`FORCE=1` —
+обновить, потеряв их).
+
+`install.sh` повторно запускать незачем. Если всё же нужно (например,
+переустановить Redis или Node.js):
+
+```bash
+DOMAIN=infocenter.2.27.10.126.nip.io BRANCH=<ветка> bash /opt/infocenter-rck/deploy/install.sh
+```
+
+Конфиг nginx он не трогает, если уже есть любой конфиг с `server_name` этого
+домена, а certbot тогда не запускает. Но systemd-юнит он перезаписывает из
+репозитория, а Redis перезапускает.
+
+## Дубль «Инфоцентра РЦК» (dept-115)
+
+Из приложения дубль убран кодом. В Redis он остаётся, пока его не
+перенести в архив:
+
+```bash
+cd /opt/infocenter-rck && set -a && . /etc/infocenter-rck.env && set +a
+node deploy/archive-rck-duplicate.js            # только отчёт
+node deploy/archive-rck-duplicate.js --apply    # отчёт + перенос в архив
+```
+
+Отчёт делит карточки дубля на «совпадает с РЦК», «в РЦК правили позже» и
+**«только в дубле»** — последние в «Инфоцентре РЦК» отсутствуют, и их нужно
+просмотреть глазами: сами они никуда не сливаются. `--apply` переименовывает
+ключи дубля (данные, снимки, история карточек) в
+`rck:archive:dept-115:<дата>:*` — ничего не удаляется, команда возврата
+печатается в конце.
 
 ## Резервные копии
 

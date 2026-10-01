@@ -44,9 +44,12 @@ export default function App() {
   const [editMode, setEditMode] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
-  // Витрина — общий для всех отделов экран со стикерами. При входе не
-  // открывается сама: сотрудник попадает в инфоцентр своего отдела.
+  // Витрина — общий для всех отделов экран со стикерами. При самом первом
+  // входе открывается она, дальше — то, с чем сотрудник работал в прошлый раз
+  // (витрина, сводный экран или инфоцентр). Решает store.ts после bootstrap
+  // (startView); до этого показываем экран загрузки, чтобы ничего не мигало.
   const [showcaseOpen, setShowcaseOpen] = useState(false);
+  const [viewApplied, setViewApplied] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Импорт JSON: заменить всё или только добавить карточки из файла.
   const importModeRef = useRef<'replace' | 'append'>('replace');
@@ -68,6 +71,8 @@ export default function App() {
     appendAll,
     loadCardHistory,
     portalError,
+    startView,
+    rememberView,
     localLeftovers,
     adoptLocalLeftovers,
     dismissLocalLeftovers,
@@ -106,25 +111,36 @@ export default function App() {
   const isRckBoard = !summaryOpen && !showcaseOpen && activeBoardId === legacyBoardId;
   const onBoard = !summaryOpen && !showcaseOpen;
 
+  useEffect(() => {
+    if (!startView || viewApplied) return;
+    setShowcaseOpen(startView.kind === 'showcase');
+    setSummaryOpen(startView.kind === 'summary');
+    setViewApplied(true);
+  }, [startView, viewApplied]);
+
   const openBoardFromSummary = (boardId: string) => {
     setSummaryOpen(false);
+    rememberView({ kind: 'board', boardId });
     void switchBoard(boardId);
   };
 
   const selectBoard = (boardId: string) => {
     setSummaryOpen(false);
     setShowcaseOpen(false);
+    rememberView({ kind: 'board', boardId });
     void switchBoard(boardId);
   };
 
   const openSummary = () => {
     setShowcaseOpen(false);
     setSummaryOpen(true);
+    rememberView({ kind: 'summary' });
   };
 
   const openShowcase = () => {
     setSummaryOpen(false);
     setShowcaseOpen(true);
+    rememberView({ kind: 'showcase' });
   };
 
   const formattedToday = useMemo(() => {
@@ -366,7 +382,7 @@ export default function App() {
           </div>
         </motion.header>
 
-        {!showcaseOpen && (
+        {viewApplied && !showcaseOpen && (
         <motion.nav
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -563,7 +579,11 @@ export default function App() {
         )}
 
         <main className="min-h-[400px]">
-          {showcaseOpen ? (
+          {!viewApplied ? (
+            <div className="elegant-card rounded-2xl p-12 flex items-center justify-center gap-2.5 text-sm text-[#a1a1aa]">
+              <RefreshCw className="w-4 h-4 animate-spin text-indigo-400" /> Подключаемся к Битрикс24…
+            </div>
+          ) : showcaseOpen ? (
             <motion.div key="showcase" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
               <ShowcaseBoard
                 state={showcase.state}

@@ -3,7 +3,10 @@
 # Запускать от root. Скрипт можно запускать повторно — он же обновляет код.
 #
 #   curl -fsSL https://raw.githubusercontent.com/westwoodgpt-svg/infocenter-RCK/main/deploy/install.sh \
-#     | DOMAIN=vm1101304.hosted-by.u1host.com bash
+#     | DOMAIN=infocenter.2.27.10.126.nip.io bash
+#
+# Только обновить код уже установленного приложения — deploy/update.sh: он не
+# трогает nginx, сертификат, Redis и systemd.
 #
 # Параметры (переменные окружения):
 #   DOMAIN  — домен сервера (для nginx и сертификата)
@@ -11,7 +14,7 @@
 #   EMAIL   — почта для Let's Encrypt (необязательно)
 set -euo pipefail
 
-DOMAIN="${DOMAIN:-vm1101304.hosted-by.u1host.com}"
+DOMAIN="${DOMAIN:?укажите DOMAIN — имя, на которое выпущен сертификат (например infocenter.2.27.10.126.nip.io)}"
 BRANCH="${BRANCH:-main}"
 EMAIL="${EMAIL:-}"
 REPO="https://github.com/westwoodgpt-svg/infocenter-RCK.git"
@@ -91,11 +94,15 @@ systemctl enable infocenter-rck
 systemctl restart infocenter-rck
 
 log "nginx для $DOMAIN"
-# certbot дописывает в конфиг блок HTTPS — не затираем его при повторном запуске.
-if [ -f /etc/letsencrypt/live/"$DOMAIN"/fullchain.pem ] && [ -f /etc/nginx/sites-available/infocenter-rck ]; then
-  echo "Сертификат уже есть — конфиг nginx оставляю как есть."
+APP_PORT="$(grep -E '^PORT=' "$ENV_FILE" | tail -1 | cut -d= -f2)"
+APP_PORT="${APP_PORT:-3000}"
+# Уже есть конфиг nginx с этим именем (наш или настроенный вручную, с блоком
+# HTTPS от certbot) — не трогаем его, иначе потеряем сертификат и порт.
+EXISTING_NGINX="$(grep -rlsE "server_name[^;]*[[:space:]]${DOMAIN//./\\.}[[:space:];]" /etc/nginx/sites-enabled /etc/nginx/conf.d || true)"
+if [ -n "$EXISTING_NGINX" ]; then
+  echo "Конфиг nginx для $DOMAIN уже есть ($EXISTING_NGINX) — оставляю как есть."
 else
-  sed "s/__DOMAIN__/$DOMAIN/g" "$APP_DIR/deploy/nginx.conf.template" > /etc/nginx/sites-available/infocenter-rck
+  sed -e "s/__DOMAIN__/$DOMAIN/g" -e "s/__PORT__/$APP_PORT/g" "$APP_DIR/deploy/nginx.conf.template" > /etc/nginx/sites-available/infocenter-rck
   ln -sf /etc/nginx/sites-available/infocenter-rck /etc/nginx/sites-enabled/infocenter-rck
   rm -f /etc/nginx/sites-enabled/default
 fi
@@ -108,7 +115,7 @@ if command -v ufw >/dev/null && ufw status | grep -q 'Status: active'; then
   ufw allow OpenSSH
 fi
 
-if [ ! -f /etc/letsencrypt/live/"$DOMAIN"/fullchain.pem ]; then
+if [ -z "$EXISTING_NGINX" ] && [ ! -f /etc/letsencrypt/live/"$DOMAIN"/fullchain.pem ]; then
   log "Сертификат Let's Encrypt для $DOMAIN"
   if [ -n "$EMAIL" ]; then
     certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos --redirect -m "$EMAIL"

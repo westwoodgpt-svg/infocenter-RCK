@@ -436,6 +436,31 @@ export function normalizeSummaryConfig(raw) {
   return { version: 1, order, boards };
 }
 
+// ---------------------------------------------------------------------------
+// Последний открытый вид сотрудника: витрина, сводный экран или инфоцентр.
+// Личная настройка — лежит под сотрудником, как настройка сводного экрана,
+// поэтому переезжает с ним на другой компьютер и в десктоп Битрикс24.
+// ---------------------------------------------------------------------------
+
+const lastViewKey = (userId) => `rck:last-view:${userId}`;
+
+export function normalizeView(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  if (raw.kind === 'showcase' || raw.kind === 'summary') return { kind: raw.kind };
+  if (raw.kind === 'board' && typeof raw.boardId === 'string' && raw.boardId && raw.boardId.length <= 100) {
+    return { kind: 'board', boardId: raw.boardId };
+  }
+  return null;
+}
+
+export async function loadLastView(userId) {
+  return normalizeView(await readJson(lastViewKey(userId)));
+}
+
+export async function saveLastView(userId, view) {
+  await redisClient().set(lastViewKey(userId), JSON.stringify(view));
+}
+
 export async function loadSummaryConfig(userId) {
   const stored = await readJson(summaryConfigKey(userId));
   return stored ? normalizeSummaryConfig(stored) : null;

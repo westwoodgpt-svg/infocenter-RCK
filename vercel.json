@@ -7,6 +7,7 @@
               { "src": "/api/bitrix-status", "dest": "/api/bitrix-status" },
               { "src": "/api/showcase-upload", "dest": "/api/showcase-upload" },
               { "src": "/api/bx24-sdk", "dest": "/api/bx24-sdk" },
+              { "src": "/api/client-log", "dest": "/api/client-log" },
               { "src": "/(.*)", "dest": "/api/serve" }
       ],
       "functions": {

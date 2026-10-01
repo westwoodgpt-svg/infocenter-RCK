@@ -166,6 +166,9 @@ export interface SummaryConfig {
 
 export const EMPTY_SUMMARY_CONFIG: SummaryConfig = { version: 1, order: [], boards: {} };
 
+/** Что открыто: витрина, сводный экран или инфоцентр отдела. */
+export type AppView = { kind: 'showcase' } | { kind: 'summary' } | { kind: 'board'; boardId: string };
+
 /** Что сервер сообщает открывшему приложение: кто он и что ему доступно. */
 export interface BootstrapInfo {
   me: { id: string; name: string; isAdmin: boolean };
@@ -175,6 +178,8 @@ export interface BootstrapInfo {
   canSeeSummary: boolean;
   legacyBoardId: string;
   warning: string | null;
+  /** Что сотрудник открывал в прошлый раз (уже проверено сервером на доступность). */
+  lastView: AppView | null;
 }
 
 /** Один отдел на сводном экране. */

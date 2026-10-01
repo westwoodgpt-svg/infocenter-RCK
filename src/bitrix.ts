@@ -1,4 +1,4 @@
-import { AnyCard, BootstrapInfo, DashboardState, ShowcaseNote, ShowcaseState, SummaryConfig, SummarySection, TabId } from './types';
+import { AnyCard, AppView, BootstrapInfo, DashboardState, ShowcaseNote, ShowcaseState, SummaryConfig, SummarySection, TabId } from './types';
 
 // Общее хранилище дашборда на уровне приложения Битрикс24 (app.option) —
 // один и тот же ключ виден всем пользователям портала, установившим
@@ -6,7 +6,9 @@ import { AnyCard, BootstrapInfo, DashboardState, ShowcaseNote, ShowcaseState, Su
 // действительно общие данные для всех, кто открывает инфоцентр из Битрикс24.
 
 const OPTION_KEY = 'rck_dashboard_v1';
-const INIT_TIMEOUT_MS = 4000;
+// Сколько ждать ответа BX24.init. В Яндекс Браузере и десктопе Битрикс24
+// приложение поднимается заметно дольше, чем в Chrome; 4 секунд не хватало.
+const INIT_TIMEOUT_MS = 10000;
 
 declare global {
   interface Window {
@@ -83,16 +85,36 @@ function loadScript(src: string): Promise<boolean> {
   });
 }
 
-/** Подключить SDK Битрикс24. Возвращает null при успехе или текст ошибки. */
-export async function loadBx24Sdk(): Promise<string | null> {
-  if (hasBX24()) return null;
+export type SdkSource = 'bitrix24.com' | 'self' | 'none';
+
+/** Подключить SDK Битрикс24: откуда он взялся и текст ошибки, если не взялся. */
+export async function loadBx24Sdk(): Promise<{ source: SdkSource; error: string | null }> {
+  if (hasBX24()) return { source: 'bitrix24.com', error: null };
   const failed: string[] = [];
   for (const src of SDK_SOURCES) {
     await loadScript(src);
-    if (hasBX24()) return null;
-    failed.push(src.startsWith('/') ? 'копия на нашем сервере' : src);
+    const source: SdkSource = src.startsWith('/') ? 'self' : 'bitrix24.com';
+    if (hasBX24()) return { source, error: null };
+    failed.push(source === 'self' ? 'копия на нашем сервере' : src);
   }
-  return `не загрузилась библиотека Битрикс24 (${failed.join(', ')})`;
+  return { source: 'none', error: `не загрузилась библиотека Битрикс24 (${failed.join(', ')})` };
+}
+
+export type LaunchOutcome = 'bitrix' | 'no-sdk' | 'init-timeout' | 'bootstrap-error';
+
+/** Как прошёл запуск — на сервер, в /api/bitrix-status (api/client-log.js).
+ *  Без авторизации и персональных данных: только итог, время и браузер. */
+export function reportLaunch(entry: { outcome: LaunchOutcome; sdkSource: SdkSource; initMs: number; error?: string | null }) {
+  try {
+    void fetch('/api/client-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...entry, ua: navigator.userAgent }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch {
+    // журнал необязателен
+  }
 }
 
 export function bx24Init(): Promise<boolean> {
@@ -112,7 +134,17 @@ export function bx24Init(): Promise<boolean> {
     } catch {
       finish(false);
     }
-    setTimeout(() => finish(hasBX24()), INIT_TIMEOUT_MS);
+    // Ответа на init нет — годимся, только если портал уже выдал авторизацию:
+    // без неё ни сохранить, ни загрузить ничего нельзя.
+    setTimeout(() => {
+      let auth: BXAuth | false = false;
+      try {
+        auth = hasBX24() ? window.BX24!.getAuth() : false;
+      } catch {
+        auth = false;
+      }
+      finish(Boolean(auth && auth.access_token));
+    }, INIT_TIMEOUT_MS);
   });
 }
 
@@ -272,9 +304,16 @@ export async function bootstrapRemote(): Promise<{ data: BootstrapInfo | null; e
       canSeeSummary: Boolean(data.canSeeSummary),
       legacyBoardId: data.legacyBoardId || LEGACY_BOARD_ID,
       warning: data.warning || null,
+      lastView: data.lastView || null,
     },
     error: null,
   };
+}
+
+/** Запомнить на портале, что сотрудник открыл (витрина, сводный экран, инфоцентр). */
+export async function saveLastViewRemote(view: AppView): Promise<{ error: string | null }> {
+  const { error } = await postDashboardApi<ApiResponse>({ action: 'last-view-save', view });
+  return { error };
 }
 
 // Запасное чтение из app.option имеет смысл только для исторического

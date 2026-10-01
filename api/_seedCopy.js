@@ -64,7 +64,15 @@ export async function peekLegacyCopy() {
  * Ничего не бросает: это фоновая задача, она не должна ронять открытие
  * приложения. Возвращает краткий отчёт (виден в /api/bitrix-status).
  */
+// ОТКЛЮЧЕНО с 02.10.2026: отдел РЦК работает в самом «Инфоцентре РЦК»
+// (api/_access.js, findRckDepartment), и копия у отдела стала дублем. Функция
+// оставлена, чтобы было видно, как копия делалась; вызывать её некому.
 export async function ensureLegacyCopy() {
+  return { status: 'разовая копия отключена: отдел РЦК работает в «Инфоцентре РЦК»' };
+}
+
+// eslint-disable-next-line no-unused-vars
+async function legacyCopyDisabled() {
   try {
     const departments = await getDepartmentTree();
     if (!departments) return { status: 'нет структуры отделов' };
