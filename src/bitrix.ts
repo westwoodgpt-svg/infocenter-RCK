@@ -53,6 +53,48 @@ export function hasBX24(): boolean {
   return typeof window !== 'undefined' && !!window.BX24;
 }
 
+// SDK Битрикс24 раньше подключался в index.html через document.write с
+// api.bitrix24.com. Если скрипт не доезжал (Chrome блокирует document.write
+// внешних скриптов на медленной сети, его режут блокировщики рекламы и
+// корпоративные фильтры), приложение молча уходило в автономный режим — и
+// правки сотрудника жили только в его браузере. Теперь грузим SDK сами и с
+// запасным источником: наш сервер отдаёт копию того же файла (api/bx24-sdk.js).
+const SDK_SOURCES = ['https://api.bitrix24.com/api/v1/', '/api/bx24-sdk'];
+const SDK_LOAD_TIMEOUT_MS = 8000;
+
+function loadScript(src: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const script = document.createElement('script');
+    let done = false;
+    const finish = (ok: boolean) => {
+      if (done) return;
+      done = true;
+      resolve(ok);
+    };
+    script.src = src;
+    script.async = true;
+    script.onload = () => finish(true);
+    script.onerror = () => {
+      script.remove();
+      finish(false);
+    };
+    setTimeout(() => finish(false), SDK_LOAD_TIMEOUT_MS);
+    document.head.appendChild(script);
+  });
+}
+
+/** Подключить SDK Битрикс24. Возвращает null при успехе или текст ошибки. */
+export async function loadBx24Sdk(): Promise<string | null> {
+  if (hasBX24()) return null;
+  const failed: string[] = [];
+  for (const src of SDK_SOURCES) {
+    await loadScript(src);
+    if (hasBX24()) return null;
+    failed.push(src.startsWith('/') ? 'копия на нашем сервере' : src);
+  }
+  return `не загрузилась библиотека Битрикс24 (${failed.join(', ')})`;
+}
+
 export function bx24Init(): Promise<boolean> {
   return new Promise((resolve) => {
     if (!hasBX24()) {

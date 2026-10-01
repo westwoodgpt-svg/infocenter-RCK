@@ -25,6 +25,8 @@ import {
   Eye as EyeIcon,
   Info as InfoIcon,
   LayoutDashboard,
+  FilePlus2,
+  MonitorSmartphone,
 } from 'lucide-react';
 
 import { TabId, DashboardState, AnyCard } from './types';
@@ -34,6 +36,7 @@ import BoardSwitcher from './components/BoardSwitcher';
 import SummaryBoard from './components/SummaryBoard';
 import ShowcaseBoard from './components/showcase/ShowcaseBoard';
 import { useShowcaseStore } from './showcaseStore';
+import { isInIframe } from './bitrix';
 import logoHeader from './assets/logo-header.svg';
 
 export default function App() {
@@ -45,6 +48,8 @@ export default function App() {
   // открывается сама: сотрудник попадает в инфоцентр своего отдела.
   const [showcaseOpen, setShowcaseOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Импорт JSON: заменить всё или только добавить карточки из файла.
+  const importModeRef = useRef<'replace' | 'append'>('replace');
   const {
     state,
     syncMode,
@@ -60,7 +65,12 @@ export default function App() {
     resetToSeed,
     clearAll,
     replaceAll,
+    appendAll,
     loadCardHistory,
+    portalError,
+    localLeftovers,
+    adoptLocalLeftovers,
+    dismissLocalLeftovers,
     unsyncedLocal,
     keepLocalCopy,
     discardLocalCopy,
@@ -142,8 +152,28 @@ export default function App() {
     setMenuOpen(false);
   };
 
-  const handleImportClick = () => {
+  const handleImportClick = (mode: 'replace' | 'append' = 'replace') => {
+    importModeRef.current = mode;
     fileInputRef.current?.click();
+  };
+
+  const downloadJson = (data: unknown, name: string) => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleAdoptLeftovers = () => {
+    const added = adoptLocalLeftovers();
+    alert(
+      added
+        ? `Добавлено карточек: ${added}. Они сохранены в инфоцентре «${activeBoard?.title || ''}» и видны коллегам.`
+        : 'Все эти карточки уже есть в инфоцентре — добавлять нечего.'
+    );
   };
 
   const handleImportFile = (e: ChangeEvent<HTMLInputElement>) => {
@@ -156,7 +186,12 @@ export default function App() {
         const validKeys: TabId[] = ['security', 'quality', 'production', 'costs', 'personnel'];
         const isValid = validKeys.every((k) => Array.isArray(parsed[k]));
         if (!isValid) throw new Error('bad shape');
-        replaceAll(parsed);
+        if (importModeRef.current === 'append') {
+          const added = appendAll(parsed);
+          alert(added ? `Добавлено карточек: ${added}. Существующие карточки не изменились.` : 'Все карточки из файла уже есть в инфоцентре.');
+        } else {
+          replaceAll(parsed);
+        }
         setMenuOpen(false);
       } catch {
         alert('Не удалось прочитать файл — это должен быть JSON, экспортированный из этого дашборда.');
@@ -281,7 +316,7 @@ export default function App() {
                 <RefreshCw className={`w-4 h-4 ${shownStatus === 'saving' ? 'animate-spin' : ''}`} />
               </button>
             )}
-            {(showcaseOpen || (canEdit && !summaryOpen)) && (
+            {!portalError && (showcaseOpen || (canEdit && !summaryOpen)) && (
               <button
                 onClick={() => setEditMode((v) => !v)}
                 className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-colors ${
@@ -312,8 +347,11 @@ export default function App() {
                   <button onClick={handleExport} className="w-full flex items-center gap-2.5 px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800/60 transition-colors">
                     <Download className="w-4 h-4 text-emerald-400" /> Экспортировать JSON
                   </button>
-                  <button onClick={handleImportClick} className="w-full flex items-center gap-2.5 px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800/60 transition-colors">
-                    <Upload className="w-4 h-4 text-blue-400" /> Импортировать JSON
+                  <button onClick={() => handleImportClick('append')} className="w-full flex items-center gap-2.5 px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800/60 transition-colors">
+                    <FilePlus2 className="w-4 h-4 text-emerald-400" /> Добавить карточки из JSON
+                  </button>
+                  <button onClick={() => handleImportClick('replace')} className="w-full flex items-center gap-2.5 px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800/60 transition-colors">
+                    <Upload className="w-4 h-4 text-blue-400" /> Импортировать JSON (заменить всё)
                   </button>
                   <button onClick={handleReset} className="w-full flex items-center gap-2.5 px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800/60 transition-colors border-t border-[#1f1f23]">
                     <RotateCcw className="w-4 h-4 text-amber-400" /> Сбросить к данным РЦК
@@ -365,6 +403,90 @@ export default function App() {
             })}
           </div>
         </motion.nav>
+        )}
+
+        {portalError && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="elegant-card rounded-2xl p-4 border border-rose-500/30 bg-rose-500/5 flex flex-col md:flex-row md:items-center gap-3"
+          >
+            <AlertTriangle className="w-5 h-5 text-rose-400 flex-shrink-0" />
+            <div className="text-xs text-rose-100/90 leading-relaxed flex-1">
+              <p className="font-semibold text-rose-300">Нет связи с Битрикс24 — правка временно отключена.</p>
+              <p className="mt-1 text-rose-100/70">
+                Причина: {portalError}. Без связи изменения сохранились бы только в этом браузере, и коллеги бы их не
+                увидели. Обновите страницу; если не помогает — отключите блокировщик рекламы для портала или
+                сообщите администратору.
+              </p>
+            </div>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-3 py-2 rounded-xl text-xs font-semibold bg-rose-500/20 border border-rose-500/40 text-rose-200 hover:bg-rose-500/30 transition-colors flex-shrink-0"
+            >
+              Обновить страницу
+            </button>
+          </motion.div>
+        )}
+
+        {syncMode === 'local' && !portalError && !isInIframe() && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="elegant-card rounded-2xl p-4 border border-amber-500/30 bg-amber-500/5 flex items-start gap-3"
+          >
+            <MonitorSmartphone className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-100/90 leading-relaxed">
+              <span className="font-semibold text-amber-200">Инфоцентр открыт напрямую, а не через Битрикс24.</span>{' '}
+              Всё, что вы здесь меняете, остаётся только в этом браузере — коллеги этого не увидят. Откройте
+              инфоцентр из меню портала. Если вы уже вносили здесь данные, сохраните их: ⚙ → «Экспортировать JSON»,
+              а затем в инфоцентре отдела на портале ⚙ → «Добавить карточки из JSON».
+            </p>
+          </motion.div>
+        )}
+
+        {localLeftovers && isShared && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="elegant-card rounded-2xl p-4 border border-amber-500/30 bg-amber-500/5 flex flex-col md:flex-row md:items-center gap-3"
+          >
+            <UploadCloud className="w-5 h-5 text-amber-400 flex-shrink-0" />
+            <div className="text-xs text-amber-100/90 leading-relaxed flex-1">
+              <p className="font-semibold text-amber-200">
+                В этом браузере остались карточки, внесённые без связи с порталом: {localLeftovers.count}
+                {localLeftovers.savedAt
+                  ? ` (последняя правка — ${new Date(localLeftovers.savedAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })})`
+                  : ''}
+                .
+              </p>
+              <p className="mt-1 text-amber-100/70">
+                Коллеги их не видят. {onBoard && canEdit && activeBoard
+                  ? `Добавьте их в инфоцентр «${activeBoard.title}» — существующие карточки не изменятся.`
+                  : 'Откройте инфоцентр своего отдела, чтобы добавить их туда.'}{' '}
+                Или скачайте их файлом и загрузите позже через ⚙ → «Добавить карточки из JSON».
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
+              {onBoard && canEdit && (
+                <button
+                  onClick={handleAdoptLeftovers}
+                  className="px-3 py-2 rounded-xl text-xs font-semibold bg-amber-500/20 border border-amber-500/40 text-amber-200 hover:bg-amber-500/30 transition-colors"
+                >
+                  Добавить в этот инфоцентр
+                </button>
+              )}
+              <button
+                onClick={() => downloadJson(localLeftovers.state, `infocenter-iz-brauzera-${new Date().toISOString().slice(0, 10)}.json`)}
+                className="px-3 py-2 rounded-xl text-xs font-semibold bg-zinc-800/60 border border-zinc-700/60 text-zinc-300 hover:text-white transition-colors"
+              >
+                Скачать JSON
+              </button>
+              <button onClick={dismissLocalLeftovers} className="px-2 py-2 text-xs text-zinc-500 hover:text-zinc-300">
+                Позже
+              </button>
+            </div>
+          </motion.div>
         )}
 
         {accessWarning && (

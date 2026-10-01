@@ -6,6 +6,7 @@
               { "src": "/api/save-dashboard", "dest": "/api/save-dashboard" },
               { "src": "/api/bitrix-status", "dest": "/api/bitrix-status" },
               { "src": "/api/showcase-upload", "dest": "/api/showcase-upload" },
+              { "src": "/api/bx24-sdk", "dest": "/api/bx24-sdk" },
               { "src": "/(.*)", "dest": "/api/serve" }
       ],
       "functions": {

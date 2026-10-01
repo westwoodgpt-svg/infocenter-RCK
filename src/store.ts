@@ -20,11 +20,13 @@ import {
   fetchSummaryRemote,
   isInIframe,
   LEGACY_BOARD_ID,
+  loadBx24Sdk,
   loadDashboardRemote,
   saveDashboardRemote,
   saveSummaryConfigRemote,
 } from './bitrix';
 import { readLocalCardHistory, recordLocalHistory } from './history';
+import { appendCards, ownCards } from './mergeCards';
 
 // Кэш инфоцентра в браузере: свой на каждый отдел.
 const CACHE_PREFIX = 'rck-dashboard-v2:';
@@ -149,6 +151,20 @@ export interface UnsyncedLocalCopy {
 
 const LOCAL_BOARD: BoardInfo = { id: LOCAL_BOARD_ID, title: 'Инфоцентр (этот браузер)', canEdit: true };
 
+/** Карточки, оставшиеся в этом браузере от работы в автономном режиме. */
+export interface LocalLeftovers {
+  state: DashboardState;
+  count: number;
+  savedAt: string | null;
+}
+
+function readLocalLeftovers(): LocalLeftovers | null {
+  const cache = readCache(LOCAL_BOARD_ID);
+  if (!cache) return null;
+  const { state, count } = ownCards(cache.state);
+  return count ? { state, count, savedAt: cache.savedAt } : null;
+}
+
 export function useDashboardStore() {
   const [state, setStateRaw] = useState<DashboardState>(SEED_DATA);
   const [syncMode, setSyncMode] = useState<SyncMode>('checking');
@@ -166,6 +182,10 @@ export function useDashboardStore() {
   const [accessWarning, setAccessWarning] = useState<string | null>(null);
   // Инфоцентр, за которым закреплён бренд РЦК: только у него в шапке логотип.
   const [legacyBoardId, setLegacyBoardId] = useState<string>(LEGACY_BOARD_ID);
+  // Приложение открыто внутри портала, но связаться с Битрикс24 не удалось.
+  // Тогда правка запрещена: иначе она осталась бы только в этом браузере.
+  const [portalError, setPortalError] = useState<string | null>(null);
+  const [localLeftovers, setLocalLeftovers] = useState<LocalLeftovers | null>(null);
 
   // Синхронизация живёт на ref-ах: таймеры и обработчики должны видеть
   // актуальные значения, а не те, что были на момент их создания.
@@ -405,10 +425,12 @@ export function useDashboardStore() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const startLocal = () => {
+      const startLocal = (failure: string | null = null) => {
         modeRef.current = 'local';
         setSyncMode('local');
-        setBoards([LOCAL_BOARD]);
+        setPortalError(failure);
+        canEditRef.current = !failure;
+        setBoards([failure ? { ...LOCAL_BOARD, title: 'Инфоцентр (нет связи с Битрикс24)', canEdit: false } : LOCAL_BOARD]);
         setLegacyBoardId(LOCAL_BOARD_ID); // автономный режим — это тот же инфоцентр РЦК
         adoptLegacyCache(LOCAL_BOARD_ID);
         const cache = readCache(LOCAL_BOARD_ID) || emptyCache(SEED_DATA);
@@ -425,10 +447,12 @@ export function useDashboardStore() {
         startLocal();
         return;
       }
-      const ready = await bx24Init();
+      const sdkError = await loadBx24Sdk();
+      if (cancelled) return;
+      const ready = !sdkError && (await bx24Init());
       if (cancelled) return;
       if (!ready) {
-        startLocal();
+        startLocal(sdkError || 'Битрикс24 не ответил на подключение приложения');
         return;
       }
 
@@ -478,6 +502,7 @@ export function useDashboardStore() {
         return;
       }
       await openBoard(target);
+      if (!cancelled) setLocalLeftovers(readLocalLeftovers());
     })();
     return () => {
       cancelled = true;
@@ -580,6 +605,41 @@ export function useDashboardStore() {
     [mutate]
   );
 
+  // Добавить карточки из другого инфоцентра (JSON-файл, автономная копия),
+  // ничего не удаляя из открытого. Возвращает число добавленных карточек.
+  const appendAll = useCallback(
+    (extra: DashboardState): number => {
+      let added = 0;
+      mutate((prev) => {
+        const merged = appendCards(prev, extra);
+        added = merged.added;
+        return merged.added ? merged.state : prev;
+      });
+      return added;
+    },
+    [mutate]
+  );
+
+  // Карточки, оставшиеся в браузере от автономного режима, — в открытый
+  // инфоцентр. Сам автономный кэш не удаляем, а откладываем под другим
+  // ключом: это последняя копия того, что сотрудник вносил.
+  const adoptLocalLeftovers = useCallback((): number => {
+    const leftovers = localLeftovers;
+    if (!leftovers || !canEditRef.current || modeRef.current !== 'bitrix') return 0;
+    const added = appendAll(leftovers.state);
+    try {
+      const raw = localStorage.getItem(CACHE_PREFIX + LOCAL_BOARD_ID);
+      if (raw) localStorage.setItem(`${CACHE_PREFIX}${LOCAL_BOARD_ID}:moved-${new Date().toISOString().slice(0, 10)}`, raw);
+      localStorage.removeItem(CACHE_PREFIX + LOCAL_BOARD_ID);
+    } catch {
+      // не критично: карточки уже в инфоцентре
+    }
+    setLocalLeftovers(null);
+    return added;
+  }, [localLeftovers, appendAll]);
+
+  const dismissLocalLeftovers = useCallback(() => setLocalLeftovers(null), []);
+
   const resetToSeed = useCallback(() => mutate(() => SEED_DATA), [mutate]);
   const clearAll = useCallback(() => mutate(() => EMPTY_DASHBOARD), [mutate]);
   const replaceAll = useCallback((next: DashboardState) => mutate(() => next), [mutate]);
@@ -672,6 +732,11 @@ export function useDashboardStore() {
     resetToSeed,
     clearAll,
     replaceAll,
+    appendAll,
     loadCardHistory,
+    portalError,
+    localLeftovers,
+    adoptLocalLeftovers,
+    dismissLocalLeftovers,
   };
 }

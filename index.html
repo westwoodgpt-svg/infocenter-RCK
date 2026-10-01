@@ -4,13 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Инфоцентр РЦК</title>
-    <script>
-      // SDK Битрикс24 подключается только внутри портала (iframe приложения),
-      // чтобы при прямом открытии дашборд честно работал в автономном режиме
-      if (window.self !== window.top) {
-        document.write('<script src="https://api.bitrix24.com/api/v1/"><\/script>');
-      }
-    </script>
+    <!-- SDK Битрикс24 подключает само приложение (src/bitrix.ts, loadBx24Sdk):
+         с api.bitrix24.com, а если тот недоступен — через наш сервер. -->
   </head>
   <body>
     <div id="root"></div>

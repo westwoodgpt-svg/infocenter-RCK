@@ -362,6 +362,32 @@ export async function peekDashboard(prefix) {
   }
 }
 
+// Какие инфоцентры вообще хранятся на сервере (для диагностики переноса):
+// префикс, номер версии, число карточек, когда и кем сохранён последний раз.
+export async function listStoredBoards() {
+  const redis = redisClient();
+  const keys = [];
+  let cursor = '0';
+  do {
+    const [next, batch] = await redis.scan(cursor, 'MATCH', 'rck:board:*:current', 'COUNT', 500);
+    cursor = next;
+    keys.push(...batch);
+  } while (cursor !== '0');
+  const out = [];
+  for (const key of keys) {
+    const prefix = key.slice('rck:board:'.length, -':current'.length);
+    try {
+      const parsed = JSON.parse(await redis.get(key));
+      const lists = listsFor(prefix);
+      const cards = lists.reduce((acc, tab) => acc + (((parsed.state || {})[tab]) || []).length, 0);
+      out.push({ prefix, rev: parsed.rev, cards, updatedAt: parsed.updatedAt || null, updatedBy: parsed.updatedBy || null });
+    } catch {
+      out.push({ prefix, error: 'не читается' });
+    }
+  }
+  return out.sort((a, b) => a.prefix.localeCompare(b.prefix));
+}
+
 // Версии карточки от старых к новым — в таком порядке их ждёт ползунок.
 export async function cardHistory(prefix, tab, cardId) {
   let rows = await redisClient().lrange(cardHistoryKey(prefix, tab, cardId), 0, -1);

@@ -2,8 +2,8 @@
 // администратора, без раскрытия самого токена. Открыть в браузере:
 // https://infocenter-rck.vercel.app/api/bitrix-status
 import { peekServiceToken, peekLastOpenAttempt } from './_bitrixAuth.js';
-import { peekDashboard } from './_store.js';
-import { getDepartmentTree, departmentTreeError, LEGACY_BOARD_ID } from './_access.js';
+import { peekDashboard, listStoredBoards } from './_store.js';
+import { getDepartmentTree, departmentTreeError, LEGACY_BOARD_ID, storagePrefixFor, boardIdForDepartment } from './_access.js';
 import { peekLegacyCopy } from './_seedCopy.js';
 
 export default async function handler(req, res) {
@@ -40,6 +40,19 @@ export default async function handler(req, res) {
     const departmentsError = departments ? null : await departmentTreeError().catch(() => null);
     // Разовая копия инфоцентра РЦК отделу-получателю: сделана или нет.
     const legacyCopy = await peekLegacyCopy();
+    // Инфоцентры с данными на сервере — с названиями отделов. Отдел, которого
+    // здесь нет, на сервер ни разу ничего не сохранял.
+    const stored = await listStoredBoards().catch(() => []);
+    const deptByPrefix = new Map((departments || []).map((d) => [storagePrefixFor(boardIdForDepartment(d.id)), d.name]));
+    const storedBoards = stored.map((b) => ({
+      ...b,
+      department: b.prefix === 'showcase' ? 'Витрина' : b.prefix === LEGACY_BOARD_ID ? 'РЦК (общий)' : deptByPrefix.get(b.prefix) || null,
+    }));
+    const departmentsWithoutData = departments
+      ? departments
+          .filter((d) => !stored.some((b) => b.prefix === storagePrefixFor(boardIdForDepartment(d.id))))
+          .map((d) => d.name)
+      : null;
     res.status(200).json({
       ok: true,
       deployedCommit,
@@ -53,6 +66,8 @@ export default async function handler(req, res) {
         : null,
       departmentsError,
       legacyCopy,
+      storedBoards,
+      departmentsWithoutData,
       legacyDepartmentId: process.env.INFOCENTER_LEGACY_DEPARTMENT_ID || null,
       hiddenDepartments: process.env.INFOCENTER_HIDDEN_DEPARTMENTS || null,
       serviceToken: token

@@ -17,6 +17,7 @@ import bitrixStatus from '../api/bitrix-status.js';
 import showcaseUpload from '../api/showcase-upload.js';
 import showcaseFile, { MAX_FILE_BYTES } from '../api/showcase-file.js';
 import serve from '../api/serve.js';
+import bx24Sdk from '../api/bx24-sdk.js';
 
 if (!process.env.DEPLOYED_COMMIT) {
   try {
@@ -50,6 +51,7 @@ const form = express.urlencoded({ extended: true, limit: '1mb' });
 app.all('/api/dashboard', json, route(dashboard));
 app.all('/api/save-dashboard', json, route(saveDashboard));
 app.all('/api/bitrix-status', route(bitrixStatus));
+app.get('/api/bx24-sdk', route(bx24Sdk));
 app.all('/api/showcase-upload', json, route(showcaseUpload));
 app.all(
   '/api/showcase-file',
