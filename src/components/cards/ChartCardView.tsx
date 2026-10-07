@@ -59,7 +59,7 @@ export default function ChartCardView({ card }: { card: ChartCard }) {
           Нет данных для графика
         </div>
       ) : (
-        <div className="w-full h-[260px]">
+        <div className="chart-area w-full h-[260px]">
           <ResponsiveContainer width="100%" height="100%">
             {card.chartType === 'pie' ? (
               <PieChart>

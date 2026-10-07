@@ -280,6 +280,19 @@ BRANCH=claude/standalone-window bash /opt/infocenter-rck/deploy/update.sh
 (после отката наблюдателей не будет — вернуть f414955: `git checkout f414955`
 и пересобрать).
 
+## Отдельное окно на всю ширину, кэш, коммит в статусе (07.10.2026)
+
+- Правка, которая стояла на сервере локальным коммитом 0e67eec, теперь есть в
+  ветке `claude/standalone-window`. В отдельном окне раскладка на всю ширину
+  (`wide-layout`), графики растут с окном: `clamp(260px, 34vh, 520px)`.
+  Обычная выкладка (`BRANCH=claude/standalone-window bash deploy/update.sh`)
+  заменит локальный коммит этим, ничего не потеряв.
+- Файлы сборки отдаются с `ETag` и `Cache-Control: no-cache`: после выкладки
+  браузер сам получает новую версию, Ctrl+F5 больше не нужен. Неизменённые
+  файлы — короткий ответ 304.
+- `/api/bitrix-status` → `deployedCommit` снова заполнен: служба (пользователь
+  `infocenter`) читает git с `safe.directory`, не упираясь в «dubious ownership».
+
 ## Резервные копии
 
 Сохранять нужно только Redis (`/var/lib/redis`) и

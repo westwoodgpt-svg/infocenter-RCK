@@ -23,7 +23,13 @@ import standaloneLogin from '../api/standalone-login.js';
 
 if (!process.env.DEPLOYED_COMMIT) {
   try {
-    process.env.DEPLOYED_COMMIT = execSync('git rev-parse HEAD', { cwd: join(import.meta.dirname, '..') })
+    // Служба работает от пользователя infocenter, а рабочая копия принадлежит
+    // root — без safe.directory git отказывается её читать («dubious ownership»).
+    const appDir = join(import.meta.dirname, '..');
+    process.env.DEPLOYED_COMMIT = execSync(`git -c safe.directory=${JSON.stringify(appDir)} rev-parse HEAD`, {
+      cwd: appDir,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
       .toString()
       .trim();
   } catch {

@@ -122,3 +122,9 @@ html, body, #root {
   outline: 2px solid #a5b4fc;
   outline-offset: 2px;
 }
+
+/* Отдельное окно на всю ширину: графики выше, но в разумных пределах.
+   Вне @layer — чтобы перебить h-[260px] из утилит Tailwind. */
+.wide-layout .chart-area {
+  height: clamp(260px, 34vh, 520px);
+}

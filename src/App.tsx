@@ -305,7 +305,9 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#09090b] text-[#fafafa] py-8 px-4 md:px-8 font-sans antialiased">
-      <div className="max-w-7xl mx-auto space-y-8">
+      {/* В отдельном окне — на всю ширину, графики растут вместе с окном
+          (.wide-layout .chart-area в index.css). */}
+      <div className={`${standalone ? 'wide-layout max-w-none' : 'max-w-7xl'} mx-auto space-y-8`}>
 
         <motion.header
           initial={{ opacity: 0, y: -20 }}

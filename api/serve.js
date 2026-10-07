@@ -3,7 +3,8 @@
 // авторизации во внутренний iframe); обычная статическая раздача Vercel/CDN
 // отвечает на POST ошибкой 405, поэтому здесь принудительно отдаём файл
 // напрямую из функции.
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, statSync } from 'fs';
+import { createHash } from 'crypto';
 import { join, extname, normalize } from 'path';
 import { maybeCaptureServiceToken } from './_bitrixAuth.js';
 
@@ -59,6 +60,28 @@ export default async function handler(req, res) {
   }
 
   const ext = extname(filePath);
-    res.setHeader('Content-Type', MIME[ext] || 'application/octet-stream');
-    res.status(200).send(readFileSync(filePath));
+  const { body, etag } = fileWithEtag(filePath);
+  res.setHeader('Content-Type', MIME[ext] || 'application/octet-stream');
+  // Имена файлов сборки постоянные (assets/index.js), поэтому браузер должен
+  // каждый раз спрашивать, не изменился ли файл. Не изменился — короткий 304,
+  // изменился после выкладки — получит новый без Ctrl+F5.
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('ETag', etag);
+  if ((req.method === 'GET' || req.method === 'HEAD') && req.headers['if-none-match'] === etag) {
+    res.status(304).end();
+    return;
+  }
+  res.status(200).send(body);
+}
+
+// ETag по содержимому; пересчитываем, только если файл поменялся на диске.
+const etagCache = new Map();
+function fileWithEtag(filePath) {
+  const { mtimeMs, size } = statSync(filePath);
+  const cached = etagCache.get(filePath);
+  if (cached && cached.mtimeMs === mtimeMs && cached.size === size) return cached;
+  const body = readFileSync(filePath);
+  const entry = { mtimeMs, size, body, etag: `"${createHash('sha1').update(body).digest('hex').slice(0, 20)}"` };
+  etagCache.set(filePath, entry);
+  return entry;
 }
