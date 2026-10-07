@@ -26,7 +26,7 @@ import {
 import { newCardId } from '../store';
 import { ImportedSheet, parseTableFile } from '../tableImport';
 import { usePortalUsers } from '../usePortalUsers';
-import { isInIframe } from '../bitrix';
+import { isInIframe, isSessionTransport } from '../bitrix';
 import { colorFor } from './cards/palette';
 import { cellColorAt, cellColorClass, headerColorAt, swatchClass, TABLE_CELL_COLORS } from './cards/tableColors';
 import LevelIcon, { iconColumnAt, parseLevel } from './cards/LevelIcon';
@@ -221,7 +221,7 @@ export default function CardEditorModal({ open, editingCard, onClose, onSave }: 
                           ? 'Загружаем сотрудников портала…'
                           : portalUsersError
                           ? `Не удалось получить сотрудников портала: ${portalUsersError}. Введите ФИО, должность и фото вручную.`
-                          : isInIframe()
+                          : isInIframe() || isSessionTransport()
                           ? 'Сотрудники портала не найдены — проверьте, что у приложения есть право на чтение пользователей (user.get) в настройках локального приложения Битрикс24, и переоткройте инфоцентр.'
                           : 'Автоподстановка сотрудников доступна только внутри Битрикс24 — вне портала введите данные вручную.'}
                       </p>

@@ -13,6 +13,7 @@ import {
   findRckDepartment,
 } from './_access.js';
 import { peekClientLog } from './client-log.js';
+import { countSessions } from './_standalone.js';
 import { peekLegacyCopy } from './_seedCopy.js';
 
 export default async function handler(req, res) {
@@ -64,6 +65,8 @@ export default async function handler(req, res) {
       ? departments.filter((d) => !stored.some((b) => b.prefix === prefixOfDept(d))).map((d) => d.name)
       : null;
     const clientLog = await peekClientLog().catch(() => null);
+    // Только число: сами сессии и билеты наружу не выдаются никогда.
+    const standaloneSessions = await countSessions().catch(() => null);
     res.status(200).json({
       ok: true,
       deployedCommit,
@@ -81,6 +84,7 @@ export default async function handler(req, res) {
       departmentsWithoutData,
       rckDepartment: rckDept ? { id: rckDept.id, name: rckDept.name, board: LEGACY_BOARD_ID } : null,
       clientLog,
+      standaloneSessions,
       legacyDepartmentId: process.env.INFOCENTER_LEGACY_DEPARTMENT_ID || null,
       hiddenDepartments: process.env.INFOCENTER_HIDDEN_DEPARTMENTS || null,
       serviceToken: token

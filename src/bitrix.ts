@@ -104,12 +104,17 @@ export type LaunchOutcome = 'bitrix' | 'no-sdk' | 'init-timeout' | 'bootstrap-er
 
 /** Как прошёл запуск — на сервер, в /api/bitrix-status (api/client-log.js).
  *  Без авторизации и персональных данных: только итог, время и браузер. */
-export function reportLaunch(entry: { outcome: LaunchOutcome; sdkSource: SdkSource; initMs: number; error?: string | null }) {
+export function reportLaunch(entry: {
+  outcome: LaunchOutcome | 'session-expired' | 'ticket-invalid';
+  sdkSource: SdkSource;
+  initMs: number;
+  error?: string | null;
+}) {
   try {
     void fetch('/api/client-log', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...entry, ua: navigator.userAgent }),
+      body: JSON.stringify({ ...entry, mode: sessionTransport ? 'standalone' : 'portal', ua: navigator.userAgent }),
       keepalive: true,
     }).catch(() => {});
   } catch {
@@ -249,9 +254,99 @@ interface ApiResponse {
   error?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Отдельное окно: вход по cookie сессии вместо токена Битрикс24
+// (см. api/_standalone.js). Включается в store.ts, когда приложение открыто
+// не в iframe портала.
+// ---------------------------------------------------------------------------
+
+let sessionTransport = false;
+let onSessionLost: ((code: string) => void) | null = null;
+
+export function enableSessionTransport() {
+  sessionTransport = true;
+}
+
+export function isSessionTransport() {
+  return sessionTransport;
+}
+
+/** Что делать, когда сервер ответил «сессии нет» (показать экран входа). */
+export function setSessionLostHandler(fn: (code: string) => void) {
+  onSessionLost = fn;
+}
+
+async function postSessionApi<T extends ApiResponse>(
+  body: Record<string, unknown>
+): Promise<{ data: T | null; error: string | null; status: number; code?: string }> {
+  try {
+    const res = await fetch('/api/dashboard', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    let data: (T & { code?: string }) | null = null;
+    try {
+      data = (await res.json()) as T & { code?: string };
+    } catch {
+      data = null;
+    }
+    if (res.status === 401) {
+      const code = (data && data.code) || 'standalone-session-expired';
+      if (onSessionLost) onSessionLost(code);
+      return { data: null, error: (data && data.error) || 'сессия истекла', status: 401, code };
+    }
+    if (!res.ok || !data || !data.ok) return { data: null, error: (data && data.error) || `HTTP ${res.status}`, status: res.status };
+    return { data, error: null, status: res.status };
+  } catch (e) {
+    return { data: null, error: e instanceof Error ? e.message : 'сетевая ошибка', status: 0 };
+  }
+}
+
+/** Обменять билет из адреса на сессию отдельного окна. */
+export async function standaloneLogin(ticket: string): Promise<{ view: AppView | null; error: string | null; code?: string }> {
+  try {
+    const res = await fetch('/api/standalone-login', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticket }),
+    });
+    const data = (await res.json().catch(() => null)) as { ok?: boolean; view?: AppView | null; error?: string; code?: string } | null;
+    if (!res.ok || !data || !data.ok) return { view: null, error: (data && data.error) || `HTTP ${res.status}`, code: (data && data.code) || undefined };
+    return { view: data.view || null, error: null };
+  } catch (e) {
+    return { view: null, error: e instanceof Error ? e.message : 'сетевая ошибка' };
+  }
+}
+
+/** Проверить, есть ли сессия отдельного окна (и вообще отвечает ли сервер). */
+export async function probeStandaloneSession(): Promise<{ data: BootstrapInfo | null; status: number; code?: string; error: string | null }> {
+  const r = await postSessionApi<ApiResponse & BootstrapInfo>({ action: 'bootstrap' });
+  if (!r.data) return { data: null, status: r.status, code: r.code, error: r.error };
+  return { data: toBootstrapInfo(r.data), status: r.status, error: null };
+}
+
+/** Билет на отдельное окно — из портала, своим токеном Битрикс24. */
+export async function requestStandaloneTicket(view: AppView): Promise<{ ticket: string | null; error: string | null }> {
+  const { data, error } = await postDashboardApi<ApiResponse & { ticket: string }>({ action: 'standalone-ticket', view });
+  return { ticket: data ? data.ticket : null, error };
+}
+
+/** Сотрудники портала через сервер — для отдельного окна, где нет user.get. */
+export async function fetchPortalUsersViaServer(): Promise<{ users: PortalUser[]; error: string | null }> {
+  const { data, error } = await postDashboardApi<ApiResponse & { users: PortalUser[] }>({ action: 'portal-users' });
+  return { users: data ? data.users || [] : [], error };
+}
+
 async function postDashboardApi<T extends ApiResponse>(
   body: Record<string, unknown>
 ): Promise<{ data: T | null; error: string | null }> {
+  if (sessionTransport) {
+    const { data, error } = await postSessionApi<T>(body);
+    return { data, error };
+  }
   if (!hasBX24()) return { data: null, error: 'нет соединения с Битрикс24' };
 
   let auth = await currentAuth();
@@ -292,22 +387,23 @@ async function postDashboardApi<T extends ApiResponse>(
 
 // Кто открыл инфоцентр и какие инфоцентры ему доступны — решает сервер по
 // структуре отделов портала (см. api/_access.js).
+function toBootstrapInfo(data: BootstrapInfo): BootstrapInfo {
+  return {
+    me: data.me,
+    role: data.role,
+    boards: data.boards || [],
+    defaultBoardId: data.defaultBoardId,
+    canSeeSummary: Boolean(data.canSeeSummary),
+    legacyBoardId: data.legacyBoardId || LEGACY_BOARD_ID,
+    warning: data.warning || null,
+    lastView: data.lastView || null,
+  };
+}
+
 export async function bootstrapRemote(): Promise<{ data: BootstrapInfo | null; error: string | null }> {
   const { data, error } = await postDashboardApi<ApiResponse & BootstrapInfo>({ action: 'bootstrap' });
   if (error || !data) return { data: null, error };
-  return {
-    data: {
-      me: data.me,
-      role: data.role,
-      boards: data.boards || [],
-      defaultBoardId: data.defaultBoardId,
-      canSeeSummary: Boolean(data.canSeeSummary),
-      legacyBoardId: data.legacyBoardId || LEGACY_BOARD_ID,
-      warning: data.warning || null,
-      lastView: data.lastView || null,
-    },
-    error: null,
-  };
+  return { data: toBootstrapInfo(data), error: null };
 }
 
 /** Запомнить на портале, что сотрудник открыл (витрина, сводный экран, инфоцентр). */

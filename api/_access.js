@@ -10,6 +10,9 @@
 //                        получает всю структуру; плюс список ID в
 //                        INFOCENTER_DIRECTOR_IDS, если кого-то нужно добавить руками;
 //   • администратор    — все инфоцентры.
+//   • наблюдатель      — ID в INFOCENTER_VIEWER_IDS (руководство фонда): видит все
+//                        инфоцентры (а значит, и сводный экран), правит только по
+//                        общим правилам выше.
 // Сводный экран доступен всем, у кого инфоцентров больше одного.
 import { createHash } from 'node:crypto';
 import { bxServiceCall, bxUserCall, getUserProfile, redisClient } from './_bitrixAuth.js';
@@ -61,6 +64,7 @@ const envList = (name) =>
 const legacyDepartmentId = () => (process.env.INFOCENTER_LEGACY_DEPARTMENT_ID || '').trim() || null;
 const hiddenDepartmentIds = () => new Set(envList('INFOCENTER_HIDDEN_DEPARTMENTS'));
 const directorIds = () => new Set(envList('INFOCENTER_DIRECTOR_IDS'));
+const viewerIds = () => new Set(envList('INFOCENTER_VIEWER_IDS'));
 
 export const boardIdForDepartment = (departmentId) => `dept-${departmentId}`;
 
@@ -255,6 +259,9 @@ export async function resolveAccess(identity) {
       viewable.add(d.id);
       editable.add(d.id);
     }
+  }
+  if (!everything && viewerIds().has(identity.id)) {
+    for (const d of departments) viewable.add(d.id);
   }
 
   const boards = departments

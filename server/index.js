@@ -19,6 +19,7 @@ import showcaseFile, { MAX_FILE_BYTES } from '../api/showcase-file.js';
 import serve from '../api/serve.js';
 import bx24Sdk from '../api/bx24-sdk.js';
 import clientLog from '../api/client-log.js';
+import standaloneLogin from '../api/standalone-login.js';
 
 if (!process.env.DEPLOYED_COMMIT) {
   try {
@@ -53,6 +54,7 @@ app.all('/api/dashboard', json, route(dashboard));
 app.all('/api/save-dashboard', json, route(saveDashboard));
 app.all('/api/bitrix-status', route(bitrixStatus));
 app.get('/api/bx24-sdk', route(bx24Sdk));
+app.all('/api/standalone-login', express.json({ limit: '2kb' }), route(standaloneLogin));
 app.all('/api/client-log', express.json({ limit: '4kb', type: () => true }), route(clientLog));
 app.all('/api/showcase-upload', json, route(showcaseUpload));
 app.all(

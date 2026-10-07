@@ -24,6 +24,10 @@ import {
   loadBx24Sdk,
   reportLaunch,
   saveLastViewRemote,
+  enableSessionTransport,
+  probeStandaloneSession,
+  setSessionLostHandler,
+  standaloneLogin,
   loadDashboardRemote,
   saveDashboardRemote,
   saveSummaryConfigRemote,
@@ -139,6 +143,21 @@ function adoptLegacyCache(boardId: string) {
   }
 }
 
+/** Билет отдельного окна из фрагмента адреса — и сразу убрать его оттуда,
+ *  чтобы он не остался в истории браузера и не ушёл в «Скопировать ссылку». */
+function takeTicketFromHash(): string | null {
+  const match = /(?:^|[#&])ticket=([A-Za-z0-9_-]{40,100})/.exec(window.location.hash || '');
+  if (!match) return null;
+  try {
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+  } catch {
+    window.location.hash = '';
+  }
+  return match[1];
+}
+
+const isLocalHost = () => /^(localhost|127\.0\.0\.1|\[::1\])$/.test(window.location.hostname);
+
 function writeLastViewCache(view: AppView) {
   try {
     localStorage.setItem(LAST_VIEW_KEY, JSON.stringify(view));
@@ -203,6 +222,11 @@ export function useDashboardStore() {
   // Что показать при входе. null — ещё не решено (показываем экран загрузки,
   // чтобы не мигало «инфоцентр → витрина»).
   const [startView, setStartView] = useState<AppView | null>(null);
+  // Отдельное окно (не iframe портала): вход по cookie сессии.
+  const [standalone, setStandalone] = useState(false);
+  // Почему отдельное окно не может работать: 'session-expired',
+  // 'ticket-invalid' или 'server-unavailable: …'. null — всё в порядке.
+  const [standaloneLost, setStandaloneLost] = useState<string | null>(null);
   const viewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Синхронизация живёт на ref-ах: таймеры и обработчики должны видеть
@@ -463,8 +487,94 @@ export function useDashboardStore() {
         setStartView({ kind: 'board', boardId: LOCAL_BOARD_ID });
       };
 
+      // После bootstrap — одинаково для портала и отдельного окна.
+      const startShared = async (info: BootstrapInfo, preferredView: AppView | null) => {
+        modeRef.current = 'bitrix';
+        setSyncMode('bitrix');
+        setBoards(info.boards);
+        setRole(info.role);
+        setMe(info.me);
+        setCanSeeSummary(info.canSeeSummary);
+        setAccessWarning(info.warning);
+        legacyBoardRef.current = info.legacyBoardId;
+        setLegacyBoardId(info.legacyBoardId);
+        adoptLegacyCache(info.legacyBoardId);
+
+        let preferred: string | null = null;
+        try {
+          preferred = localStorage.getItem(ACTIVE_BOARD_KEY);
+        } catch {
+          preferred = null;
+        }
+        const usable = (v: AppView | null): AppView | null => {
+          if (!v) return null;
+          if (v.kind === 'showcase') return v;
+          if (v.kind === 'summary') return info.canSeeSummary ? v : null;
+          return info.boards.some((b) => b.id === v.boardId) ? v : null;
+        };
+        // При входе: вид, с которым открыли отдельное окно, иначе то, что
+        // сотрудник открывал в прошлый раз (сервер уже проверил доступ), а при
+        // первом входе — витрина.
+        const view: AppView = usable(preferredView) || info.lastView || { kind: 'showcase' };
+        writeLastViewCache(view);
+        // Инфоцентр открываем и под витриной/сводным экраном — на него
+        // переключаются одним щелчком, и он должен быть уже загружен.
+        const target =
+          (view.kind === 'board' && info.boards.some((b) => b.id === view.boardId) ? view.boardId : null) ||
+          (preferred && info.boards.some((b) => b.id === preferred) ? preferred : null) ||
+          info.defaultBoardId ||
+          (info.boards[0] ? info.boards[0].id : null);
+
+        if (!target) {
+          setSyncStatus('idle');
+          setStartView(view.kind === 'board' ? { kind: 'showcase' } : view);
+          return;
+        }
+        const opening = openBoard(target);
+        setStartView(view);
+        await opening;
+        if (!cancelled) setLocalLeftovers(readLocalLeftovers());
+      };
+
       if (!isInIframe()) {
-        startLocal();
+        // Отдельное окно: билет из адреса (#ticket=…) меняем на сессию, потом
+        // работаем по cookie. Без билета и без сессии — экран «откройте из
+        // портала», а не автономный режим с правкой.
+        const startedAt = performance.now();
+        setStandalone(true);
+        const ticket = takeTicketFromHash();
+        let ticketView: AppView | null = null;
+        let ticketFailed = false;
+        if (ticket) {
+          const login = await standaloneLogin(ticket);
+          if (login.error) ticketFailed = true;
+          else ticketView = login.view;
+        }
+        const probe = await probeStandaloneSession();
+        if (cancelled) return;
+        const initMs = performance.now() - startedAt;
+        if (probe.data) {
+          enableSessionTransport();
+          setSessionLostHandler((code) => setStandaloneLost(code === 'no-auth' ? 'session-expired' : code));
+          reportLaunch({ outcome: 'bitrix', sdkSource: 'none', initMs });
+          await startShared(probe.data, ticketView);
+          return;
+        }
+        if (probe.status === 401) {
+          const reason = ticketFailed ? 'ticket-invalid' : 'session-expired';
+          enableSessionTransport(); // чтобы журнал записал mode: standalone
+          reportLaunch({ outcome: reason, sdkSource: 'none', initMs });
+          setStandaloneLost(reason);
+          return;
+        }
+        // Сервера с API нет вовсе — так бывает только при разработке
+        // (npm run dev). Там остаётся автономный режим, как раньше.
+        if (isLocalHost()) {
+          setStandalone(false);
+          startLocal();
+          return;
+        }
+        setStandaloneLost(`server-unavailable: ${probe.error || 'нет ответа'}`);
         return;
       }
       const startedAt = performance.now();
@@ -507,44 +617,7 @@ export function useDashboardStore() {
         return;
       }
 
-      modeRef.current = 'bitrix';
-      setSyncMode('bitrix');
-      setBoards(info.boards);
-      setRole(info.role);
-      setMe(info.me);
-      setCanSeeSummary(info.canSeeSummary);
-      setAccessWarning(info.warning);
-      legacyBoardRef.current = info.legacyBoardId;
-      setLegacyBoardId(info.legacyBoardId);
-      adoptLegacyCache(info.legacyBoardId);
-
-      let preferred: string | null = null;
-      try {
-        preferred = localStorage.getItem(ACTIVE_BOARD_KEY);
-      } catch {
-        preferred = null;
-      }
-      // При входе: то, что сотрудник открывал в прошлый раз (сервер уже
-      // проверил, что это ему доступно), а при первом входе — витрина.
-      const view: AppView = info.lastView || { kind: 'showcase' };
-      writeLastViewCache(view);
-      // Инфоцентр открываем и под витриной/сводным экраном — на него
-      // переключаются одним щелчком, и он должен быть уже загружен.
-      const target =
-        (view.kind === 'board' && info.boards.some((b) => b.id === view.boardId) ? view.boardId : null) ||
-        (preferred && info.boards.some((b) => b.id === preferred) ? preferred : null) ||
-        info.defaultBoardId ||
-        (info.boards[0] ? info.boards[0].id : null);
-
-      if (!target) {
-        setSyncStatus('idle');
-        setStartView(view.kind === 'board' ? { kind: 'showcase' } : view);
-        return;
-      }
-      const opening = openBoard(target);
-      setStartView(view);
-      await opening;
-      if (!cancelled) setLocalLeftovers(readLocalLeftovers());
+      await startShared(info, null);
     })();
     return () => {
       cancelled = true;
@@ -787,6 +860,8 @@ export function useDashboardStore() {
     appendAll,
     loadCardHistory,
     portalError,
+    standalone,
+    standaloneLost,
     startView,
     rememberView,
     localLeftovers,

@@ -27,6 +27,11 @@ import {
   LayoutDashboard,
   FilePlus2,
   MonitorSmartphone,
+  AppWindow,
+  Maximize,
+  Minimize,
+  ExternalLink,
+  X,
 } from 'lucide-react';
 
 import { TabId, DashboardState, AnyCard } from './types';
@@ -36,7 +41,9 @@ import BoardSwitcher from './components/BoardSwitcher';
 import SummaryBoard from './components/SummaryBoard';
 import ShowcaseBoard from './components/showcase/ShowcaseBoard';
 import { useShowcaseStore } from './showcaseStore';
-import { isInIframe } from './bitrix';
+import { isInIframe, requestStandaloneTicket } from './bitrix';
+import StandaloneScreen from './components/StandaloneScreen';
+import { AppView } from './types';
 import logoHeader from './assets/logo-header.svg';
 
 export default function App() {
@@ -71,6 +78,8 @@ export default function App() {
     appendAll,
     loadCardHistory,
     portalError,
+    standalone,
+    standaloneLost,
     startView,
     rememberView,
     localLeftovers,
@@ -110,6 +119,65 @@ export default function App() {
   // название их отдела без чужого бренда.
   const isRckBoard = !summaryOpen && !showcaseOpen && activeBoardId === legacyBoardId;
   const onBoard = !summaryOpen && !showcaseOpen;
+
+  // --- Отдельное окно ---------------------------------------------------------
+  // Ссылка, если окно не удалось открыть сразу (блокировщик всплывающих окон,
+  // приложение Битрикс24 для компьютера): тогда показываем её кнопкой.
+  const [standaloneLink, setStandaloneLink] = useState<string | null>(null);
+  const [openingWindow, setOpeningWindow] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
+  const currentView = (): AppView =>
+    showcaseOpen ? { kind: 'showcase' } : summaryOpen ? { kind: 'summary' } : { kind: 'board', boardId: activeBoardId };
+
+  const openStandaloneWindow = async () => {
+    // Окно открываем сразу, в обработчике щелчка, — иначе его закроет
+    // блокировщик всплывающих окон; адрес присвоим, когда придёт билет.
+    // Приложение Битрикс24 для компьютера открывает новые окна в системном
+    // браузере, где пустую вкладку уже не перенаправить, — там сразу ссылка.
+    const desktopApp = /BitrixDesktop/i.test(navigator.userAgent);
+    const win = desktopApp ? null : window.open('about:blank', '_blank');
+    if (win) {
+      try {
+        win.document.title = 'Инфоцентр';
+        win.document.body.style.cssText = 'background:#09090b;color:#a1a1aa;font:14px sans-serif;padding:32px';
+        win.document.body.textContent = 'Открываем инфоцентр…';
+      } catch {
+        // не критично
+      }
+    }
+    setOpeningWindow(true);
+    const { ticket, error } = await requestStandaloneTicket(currentView());
+    setOpeningWindow(false);
+    if (!ticket) {
+      if (win) win.close();
+      alert(`Не удалось открыть отдельное окно: ${error || 'неизвестная ошибка'}`);
+      return;
+    }
+    // Билет — во фрагменте: он не уходит на сервер и не пишется в журнал nginx.
+    const url = `${window.location.origin}/#ticket=${ticket}`;
+    if (win && !win.closed) {
+      try {
+        win.opener = null;
+        win.location.replace(url);
+        return;
+      } catch {
+        // упадём на ссылку ниже
+      }
+    }
+    setStandaloneLink(url);
+  };
+
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void document.documentElement.requestFullscreen().catch(() => {});
+  };
 
   useEffect(() => {
     if (!startView || viewApplied) return;
@@ -233,6 +301,8 @@ export default function App() {
     }
   };
 
+  if (standaloneLost) return <StandaloneScreen reason={standaloneLost} />;
+
   return (
     <div className="min-h-screen bg-[#09090b] text-[#fafafa] py-8 px-4 md:px-8 font-sans antialiased">
       <div className="max-w-7xl mx-auto space-y-8">
@@ -321,6 +391,27 @@ export default function App() {
                 onOpenSummary={openSummary}
                 onOpenShowcase={openShowcase}
               />
+            )}
+            {isShared && viewApplied && !standalone && isInIframe() && (
+              <button
+                onClick={() => void openStandaloneWindow()}
+                disabled={openingWindow}
+                title="Открыть в отдельном окне — на всю вкладку браузера, без меню портала"
+                aria-label="Открыть в отдельном окне"
+                className="p-2.5 rounded-xl bg-zinc-800/60 border border-zinc-700/60 text-zinc-300 hover:text-white transition-colors disabled:opacity-50"
+              >
+                <AppWindow className="w-4 h-4" />
+              </button>
+            )}
+            {standalone && typeof document !== 'undefined' && document.fullscreenEnabled && (
+              <button
+                onClick={toggleFullscreen}
+                title={isFullscreen ? 'Выйти из полноэкранного режима (Esc)' : 'Во весь экран'}
+                aria-label={isFullscreen ? 'Выйти из полноэкранного режима' : 'Во весь экран'}
+                className="p-2.5 rounded-xl bg-zinc-800/60 border border-zinc-700/60 text-zinc-300 hover:text-white transition-colors"
+              >
+                {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+              </button>
             )}
             {isShared && !summaryOpen && (
               <button
@@ -419,6 +510,33 @@ export default function App() {
             })}
           </div>
         </motion.nav>
+        )}
+
+        {standaloneLink && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="elegant-card rounded-2xl p-4 border border-indigo-500/30 bg-indigo-500/5 flex flex-col md:flex-row md:items-center gap-3"
+          >
+            <AppWindow className="w-5 h-5 text-indigo-400 flex-shrink-0" />
+            <p className="text-xs text-indigo-100/90 leading-relaxed flex-1">
+              Отдельное окно готово. Нажмите «Открыть» — ссылка действует 60 секунд и один раз.
+            </p>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <a
+                href={standaloneLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setStandaloneLink(null)}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-indigo-500/20 border border-indigo-500/40 text-indigo-200 hover:bg-indigo-500/30 transition-colors"
+              >
+                <ExternalLink className="w-3.5 h-3.5" /> Открыть
+              </a>
+              <button onClick={() => setStandaloneLink(null)} title="Закрыть" className="p-2 text-zinc-500 hover:text-zinc-300">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </motion.div>
         )}
 
         {portalError && (

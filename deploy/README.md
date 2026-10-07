@@ -248,6 +248,38 @@ sed -i -E 's/^appendonly .*/appendonly yes/' /etc/redis/redis.conf
 systemctl start infocenter-rck
 ```
 
+## Отдельное окно и наблюдатели (ветка claude/standalone-window)
+
+**Новые переменные окружения** (`/etc/infocenter-rck.env`):
+- `INFOCENTER_VIEWER_IDS` — наблюдатели, ID сотрудников через запятую
+  (сейчас на сервере `14,40,62,115,80`, руководство фонда). Видят все
+  инфоцентры и сводный экран, правят только по общим правилам. Эта правка уже
+  стоит на сервере локальным коммитом f414955 и теперь есть в ветке, так что
+  выкладка её не затрёт.
+- `STANDALONE_ORIGIN` — **необязательна.** Адрес, с которого принимаются
+  запросы отдельного окна. По умолчанию это `https://<Host запроса>`, то есть
+  `https://infocenter.2.27.10.126.nip.io`. Задавать нужно, только если
+  инфоцентр открывают под другим именем, чем то, что nginx передаёт в `Host`.
+
+Для отдельного окна ничего больше настраивать не нужно: сессии живут в том же
+Redis (`rck:standalone-session:*`, `rck:standalone-ticket:*`), а число
+активных сессий видно в `/api/bitrix-status` (`standaloneSessions`).
+
+**Выкладка:**
+```bash
+redis-cli SAVE && cp /var/lib/redis/dump.rdb /root/redis-before-standalone-$(date +%F).rdb
+cd /opt/infocenter-rck && git log --oneline -2 && git status --short   # сверху f414955, изменений файлов нет
+BRANCH=claude/standalone-window bash /opt/infocenter-rck/deploy/update.sh
+```
+`FORCE=1` не нужен: локальный коммит f414955 не мешает переключению ветки и
+остаётся в истории ветки `claude/start-view-single-rck` на сервере. Если
+`git status --short` что-то показывает — это правки файлов прямо на сервере,
+`update.sh` остановится и перечислит их; разберитесь с ними до выкладки.
+
+**Откат:** `BRANCH=claude/start-view-single-rck bash /opt/infocenter-rck/deploy/update.sh`
+(после отката наблюдателей не будет — вернуть f414955: `git checkout f414955`
+и пересобрать).
+
 ## Резервные копии
 
 Сохранять нужно только Redis (`/var/lib/redis`) и

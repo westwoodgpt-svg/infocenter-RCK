@@ -12,7 +12,8 @@ const LOG_KEY = 'rck:client-log';
 const LOG_MAX = 300;
 
 const SOURCES = new Set(['bitrix24.com', 'self', 'none']);
-const OUTCOMES = new Set(['bitrix', 'no-sdk', 'init-timeout', 'bootstrap-error']);
+const OUTCOMES = new Set(['bitrix', 'no-sdk', 'init-timeout', 'bootstrap-error', 'session-expired', 'ticket-invalid']);
+const MODES = new Set(['portal', 'standalone']);
 
 const clip = (v, n) => String(v == null ? '' : v).replace(/[\x00-\x1f]+/g, ' ').slice(0, n);
 
@@ -21,6 +22,7 @@ export function sanitizeClientLog(body, req) {
   const initMs = Number(src.initMs);
   return {
     at: new Date().toISOString(),
+    mode: MODES.has(src.mode) ? src.mode : 'portal',
     outcome: OUTCOMES.has(src.outcome) ? src.outcome : 'unknown',
     sdkSource: SOURCES.has(src.sdkSource) ? src.sdkSource : 'none',
     initMs: Number.isFinite(initMs) ? Math.max(0, Math.min(Math.round(initMs), 600000)) : null,

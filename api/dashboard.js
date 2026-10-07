@@ -18,6 +18,8 @@ import {
 } from './_store.js';
 import { blobConfigured } from './showcase-upload.js';
 import { diskUploadsEnabled } from './showcase-file.js';
+import { destroySession, issueTicket, readCookie, readSession, sameOrigin, SESSION_COOKIE, sessionCookie } from './_standalone.js';
+import { loadPortalUsers } from './_portalUsers.js';
 
 // Сводный экран грузит несколько инфоцентров сразу, поэтому тяжёлые картинки в
 // нём не передаются — вместо них карточка помечается флагом.
@@ -68,26 +70,75 @@ export default async function handler(req, res) {
   }
 
   const { action, auth } = payload;
-  if (!auth || !auth.access_token || !auth.domain) {
-    res.status(400).json({ ok: false, error: 'отсутствует авторизация Битрикс24' });
-    return;
-  }
-
-  const credentials = { accessToken: auth.access_token, domain: auth.domain };
 
   try {
-    const identity = await resolveIdentity(credentials);
-    if (!identity) {
-      res.status(403).json({ ok: false, error: 'сессия Битрикс24 недействительна — обновите страницу' });
+    // Кто это: внутри портала — токен Битрикс24 в теле запроса, в отдельном
+    // окне — cookie сессии (api/_standalone.js). Права дальше одинаковые.
+    let identity = null;
+    let via = 'bitrix';
+    if (auth && auth.access_token && auth.domain) {
+      identity = await resolveIdentity({ accessToken: auth.access_token, domain: auth.domain });
+      if (!identity) {
+        res.status(403).json({ ok: false, error: 'сессия Битрикс24 недействительна — обновите страницу' });
+        return;
+      }
+    } else if (readCookie(req, SESSION_COOKIE)) {
+      if (!sameOrigin(req)) {
+        res.status(403).json({ ok: false, error: 'запрос пришёл не со страницы инфоцентра' });
+        return;
+      }
+      const session = await readSession(req);
+      if (!session) {
+        res.setHeader('Set-Cookie', sessionCookie('', 0));
+        res.status(401).json({ ok: false, code: 'standalone-session-expired', error: 'сессия отдельного окна истекла' });
+        return;
+      }
+      if (session.renewed) res.setHeader('Set-Cookie', sessionCookie(session.sid, session.maxAgeSec));
+      identity = session.identity;
+      via = 'session';
+    } else {
+      res.status(401).json({ ok: false, code: 'no-auth', error: 'отсутствует авторизация Битрикс24' });
       return;
     }
     const access = await resolveAccess(identity);
+
+    // Билет на отдельное окно — только изнутри портала, по токену Битрикс24:
+    // из отдельного окна новое окно не открывают, а сессия не должна
+    // размножаться сама.
+    if (action === 'standalone-ticket') {
+      if (via !== 'bitrix') {
+        res.status(403).json({ ok: false, error: 'отдельное окно открывается из портала' });
+        return;
+      }
+      const ticket = await issueTicket(identity, resolveLastView(payload.view, access));
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(200).json({ ok: true, ticket });
+      return;
+    }
+
+    if (action === 'standalone-logout') {
+      if (via === 'session') {
+        await destroySession(req);
+      }
+      res.setHeader('Set-Cookie', sessionCookie('', 0));
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    // Сотрудники портала для карточки «Ответственный» в отдельном окне (там нет
+    // BX24.callMethod). Только ФИО, должность и фото — см. api/_portalUsers.js.
+    if (action === 'portal-users') {
+      const users = await loadPortalUsers();
+      res.status(200).json({ ok: true, users });
+      return;
+    }
 
     if (action === 'bootstrap') {
       // Последний вид отдаём сразу здесь, чтобы при входе не было лишнего запроса.
       const lastView = resolveLastView(await loadLastView(identity.id).catch(() => null), access);
       res.status(200).json({
         lastView,
+        standalone: via === 'session',
         ok: true,
         me: { id: identity.id, name: identity.name, isAdmin: identity.isAdmin },
         role: access.role,

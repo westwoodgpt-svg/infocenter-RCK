@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolveIdentity } from './_access.js';
+import { readCookie, readSession, sameOrigin, SESSION_COOKIE } from './_standalone.js';
 
 export const MAX_FILE_BYTES = 50 * 1024 * 1024;
 
@@ -34,15 +35,30 @@ export default async function handler(req, res) {
     return;
   }
 
+  // В портале — токен Битрикс24 в заголовках, в отдельном окне — cookie
+  // сессии (с проверкой Origin, см. api/_standalone.js).
   const accessToken = req.headers['x-bx-access-token'];
   const domain = req.headers['x-bx-domain'];
-  if (!accessToken || !domain) {
+  let identity = null;
+  if (accessToken && domain) {
+    identity = await resolveIdentity({ accessToken: String(accessToken), domain: String(domain) }).catch(() => null);
+    if (!identity) {
+      res.status(403).json({ ok: false, error: 'сессия Битрикс24 недействительна — обновите страницу' });
+      return;
+    }
+  } else if (readCookie(req, SESSION_COOKIE)) {
+    if (!sameOrigin(req)) {
+      res.status(403).json({ ok: false, error: 'запрос пришёл не со страницы инфоцентра' });
+      return;
+    }
+    const session = await readSession(req).catch(() => null);
+    if (!session) {
+      res.status(401).json({ ok: false, code: 'standalone-session-expired', error: 'сессия отдельного окна истекла' });
+      return;
+    }
+    identity = session.identity;
+  } else {
     res.status(400).json({ ok: false, error: 'отсутствует авторизация Битрикс24' });
-    return;
-  }
-  const identity = await resolveIdentity({ accessToken: String(accessToken), domain: String(domain) }).catch(() => null);
-  if (!identity) {
-    res.status(403).json({ ok: false, error: 'сессия Битрикс24 недействительна — обновите страницу' });
     return;
   }
 

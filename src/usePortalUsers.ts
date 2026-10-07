@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchPortalUsers, hasBX24, isInIframe, PortalUser } from './bitrix';
+import { fetchPortalUsers, fetchPortalUsersViaServer, hasBX24, isInIframe, isSessionTransport, PortalUser } from './bitrix';
 
 // Кэш на модуль — чтобы каждое открытие модалки редактирования не дёргало
 // user.get заново, достаточно одного запроса за сессию.
@@ -17,12 +17,14 @@ export function usePortalUsers() {
       setLoading(false);
       return;
     }
-    if (!isInIframe() || !hasBX24()) {
+    // В отдельном окне BX24 нет — список отдаёт сервер (api/_portalUsers.js).
+    const viaServer = isSessionTransport();
+    if (!viaServer && (!isInIframe() || !hasBX24())) {
       setLoading(false);
       return;
     }
     setLoading(true);
-    if (!inFlight) inFlight = fetchPortalUsers();
+    if (!inFlight) inFlight = viaServer ? fetchPortalUsersViaServer() : fetchPortalUsers();
     let cancelled = false;
     inFlight.then(({ users: fetched, error: err }) => {
       if (cancelled) return;

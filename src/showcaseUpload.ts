@@ -1,6 +1,6 @@
 import { upload } from '@vercel/blob/client';
 import { NoteAttachment } from './types';
-import { currentAuth, refreshAuth, ShowcaseUploads } from './bitrix';
+import { currentAuth, isSessionTransport, refreshAuth, ShowcaseUploads } from './bitrix';
 import { fileToDataUrl } from './imageFile';
 
 // Вложения стикеров витрины.
@@ -75,14 +75,17 @@ async function uploadToBlob(file: File, onProgress?: (percent: number) => void):
 // только он умеет сообщать прогресс отправки.
 function sendToServer(file: File, onProgress?: (percent: number) => void): Promise<string> {
   const attempt = async (): Promise<{ status: number; url?: string; error?: string }> => {
-    const auth = await currentAuth();
-    if (!auth) throw new Error('не удалось получить авторизацию Битрикс24');
+    // В отдельном окне вход — cookie сессии, её браузер приложит сам.
+    const auth = isSessionTransport() ? null : await currentAuth();
+    if (!auth && !isSessionTransport()) throw new Error('не удалось получить авторизацию Битрикс24');
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', `/api/showcase-file?name=${encodeURIComponent(file.name)}`);
       xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-      xhr.setRequestHeader('X-Bx-Access-Token', auth.access_token);
-      xhr.setRequestHeader('X-Bx-Domain', auth.domain);
+      if (auth) {
+        xhr.setRequestHeader('X-Bx-Access-Token', auth.access_token);
+        xhr.setRequestHeader('X-Bx-Domain', auth.domain);
+      }
       if (onProgress) xhr.upload.onprogress = (e) => e.lengthComputable && onProgress((e.loaded / e.total) * 100);
       xhr.onload = () => {
         let data: { url?: string; error?: string } = {};
@@ -100,7 +103,7 @@ function sendToServer(file: File, onProgress?: (percent: number) => void): Promi
   return (async () => {
     let result = await attempt();
     // Токен портала живёт около часа — обновляем и пробуем ещё раз.
-    if (result.status === 403 && (await refreshAuth())) result = await attempt();
+    if (result.status === 403 && !isSessionTransport() && (await refreshAuth())) result = await attempt();
     if (result.status >= 400 || !result.url) throw new Error(result.error || 'не удалось загрузить файл');
     return result.url;
   })();

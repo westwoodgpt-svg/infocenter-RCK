@@ -8,6 +8,7 @@
               { "src": "/api/showcase-upload", "dest": "/api/showcase-upload" },
               { "src": "/api/bx24-sdk", "dest": "/api/bx24-sdk" },
               { "src": "/api/client-log", "dest": "/api/client-log" },
+              { "src": "/api/standalone-login", "dest": "/api/standalone-login" },
               { "src": "/(.*)", "dest": "/api/serve" }
       ],
       "functions": {
